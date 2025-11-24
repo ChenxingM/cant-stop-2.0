@@ -173,14 +173,41 @@ class PositionDAO:
         ''', (qq_id,))
         self.conn.commit()
 
+    def clear_temp_position_by_column(self, qq_id: str, column: int):
+        """清除指定列的临时标记"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            DELETE FROM player_positions
+            WHERE qq_id = ? AND column_number = ? AND marker_type = 'temp'
+        ''', (qq_id, column))
+        self.conn.commit()
+
     def convert_temp_to_permanent(self, qq_id: str):
         """将所有临时标记转换为永久标记"""
         cursor = self.conn.cursor()
+
+        # 首先获取所有临时标记的列号
+        cursor.execute('''
+            SELECT DISTINCT column_number
+            FROM player_positions
+            WHERE qq_id = ? AND marker_type = 'temp'
+        ''', (qq_id,))
+        temp_columns = [row['column_number'] for row in cursor.fetchall()]
+
+        # 删除这些列上已有的永久标记
+        for column in temp_columns:
+            cursor.execute('''
+                DELETE FROM player_positions
+                WHERE qq_id = ? AND column_number = ? AND marker_type = 'permanent'
+            ''', (qq_id, column))
+
+        # 将临时标记转换为永久标记
         cursor.execute('''
             UPDATE player_positions
             SET marker_type = 'permanent'
             WHERE qq_id = ? AND marker_type = 'temp'
         ''', (qq_id,))
+
         self.conn.commit()
 
     def get_all_positions_on_map(self) -> Dict[str, List[Position]]:
@@ -327,7 +354,10 @@ class GameStateDAO:
                 temp_markers_used = ?,
                 dice_history = ?,
                 last_dice_result = ?,
-                topped_columns = ?
+                topped_columns = ?,
+                skipped_rounds = ?,
+                pending_encounter = ?,
+                extra_d6_check_six = ?
             WHERE qq_id = ?
         ''', (
             data['current_round_active'],
@@ -336,6 +366,9 @@ class GameStateDAO:
             data['dice_history'],
             data['last_dice_result'],
             data['topped_columns'],
+            data['skipped_rounds'],
+            data['pending_encounter'],
+            data['extra_d6_check_six'],
             state.qq_id
         ))
         self.conn.commit()
@@ -370,9 +403,30 @@ class ShopDAO:
         ) for row in rows]
 
     def get_item(self, item_id: int) -> Optional[ShopItem]:
-        """获取单个道具"""
+        """获取单个道具（通过ID）"""
         cursor = self.conn.cursor()
         cursor.execute('SELECT * FROM shop_items WHERE item_id = ?', (item_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        return ShopItem(
+            item_id=row['item_id'],
+            item_name=row['item_name'],
+            item_type=row['item_type'],
+            price=row['price'],
+            faction_limit=row['faction_limit'],
+            global_limit=row['global_limit'],
+            global_sold=row['global_sold'],
+            unlocked=bool(row['unlocked']),
+            description=row['description']
+        )
+
+    def get_item_by_name(self, item_name: str) -> Optional[ShopItem]:
+        """获取单个道具（通过名称）"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM shop_items WHERE item_name = ?', (item_name,))
         row = cursor.fetchone()
 
         if not row:

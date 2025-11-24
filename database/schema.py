@@ -82,9 +82,27 @@ class DatabaseSchema:
             dice_history TEXT,
             last_dice_result TEXT,
             topped_columns TEXT,
+            skipped_rounds INTEGER DEFAULT 0,
+            pending_encounter TEXT,
             FOREIGN KEY (qq_id) REFERENCES players(qq_id)
         )
         ''')
+
+        # 为已存在的game_state表添加字段（如果不存在）
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN skipped_rounds INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN pending_encounter TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN extra_d6_check_six INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
 
         # ==================== 商店道具表 ====================
         cursor.execute('''

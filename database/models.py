@@ -59,6 +59,9 @@ class PlayerGameState:
     dice_history: List[List[int]] = field(default_factory=list)
     last_dice_result: Optional[List[int]] = None
     topped_columns: List[int] = field(default_factory=list)
+    skipped_rounds: int = 0  # 被暂停的回合数
+    pending_encounter: Optional[Dict] = None  # 等待选择的遭遇信息 {column, position, encounter_id, encounter_name}
+    extra_d6_check_six: bool = False  # 下次投骰额外投一个d6，如果是6则本回合作废
 
     def to_dict(self) -> dict:
         """转换为字典（用于存储）"""
@@ -68,20 +71,39 @@ class PlayerGameState:
             'temp_markers_used': self.temp_markers_used,
             'dice_history': json.dumps(self.dice_history),
             'last_dice_result': json.dumps(self.last_dice_result) if self.last_dice_result else None,
-            'topped_columns': json.dumps(self.topped_columns)
+            'topped_columns': json.dumps(self.topped_columns),
+            'skipped_rounds': self.skipped_rounds,
+            'pending_encounter': json.dumps(self.pending_encounter) if self.pending_encounter else None,
+            'extra_d6_check_six': int(self.extra_d6_check_six)
         }
 
     @staticmethod
     def from_dict(qq_id: str, data: dict) -> 'PlayerGameState':
         """从字典创建（用于读取）"""
+        # 处理可能为 NULL 的 JSON 字段
+        dice_history_raw = data.get('dice_history')
+        dice_history = json.loads(dice_history_raw) if dice_history_raw else []
+
+        last_dice_raw = data.get('last_dice_result')
+        last_dice_result = json.loads(last_dice_raw) if last_dice_raw else None
+
+        topped_columns_raw = data.get('topped_columns')
+        topped_columns = json.loads(topped_columns_raw) if topped_columns_raw else []
+
+        pending_encounter_raw = data.get('pending_encounter')
+        pending_encounter = json.loads(pending_encounter_raw) if pending_encounter_raw else None
+
         return PlayerGameState(
             qq_id=qq_id,
             current_round_active=bool(data.get('current_round_active', 0)),
             can_start_new_round=bool(data.get('can_start_new_round', 1)),
             temp_markers_used=data.get('temp_markers_used', 0),
-            dice_history=json.loads(data.get('dice_history', '[]')),
-            last_dice_result=json.loads(data['last_dice_result']) if data.get('last_dice_result') else None,
-            topped_columns=json.loads(data.get('topped_columns', '[]'))
+            dice_history=dice_history,
+            last_dice_result=last_dice_result,
+            topped_columns=topped_columns,
+            skipped_rounds=data.get('skipped_rounds', 0),
+            pending_encounter=pending_encounter,
+            extra_d6_check_six=bool(data.get('extra_d6_check_six', 0))
         )
 
 

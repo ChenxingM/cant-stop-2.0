@@ -2,6 +2,20 @@
 
 基于 NapCat 的 QQ 群骰子游戏机器人，带有 PySide6 GM 管理界面。
 
+## 🚀 快速启动
+
+### 1️⃣ 启动游戏本体（QQ机器人）
+```bash
+python start_game.py
+```
+
+### 2️⃣ 启动 GameMaster（管理界面）
+```bash
+python start_gamemaster.py
+```
+
+> 📖 详细启动说明请查看 [HOW_TO_START.md](HOW_TO_START.md)
+
 ## 功能特性
 
 ### ✅ 完整游戏系统

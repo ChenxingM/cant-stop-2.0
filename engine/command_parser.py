@@ -48,6 +48,10 @@ class CommandParser:
 
         # 道具相关
         'buy_item': r'^购买(.+)$',
+        'use_item': r'^使用(.+)$',
+
+        # 遭遇/道具选择
+        'make_choice': r'^选择[:：]?\s*(.+)$',
 
         # 特殊功能
         'pet_cat': r'^摸摸喵$',
@@ -116,7 +120,46 @@ class CommandParser:
             params['column'] = int(match.group(1))
 
         elif cmd_type == 'buy_item':
-            params['item_name'] = match.group(1).strip()
+            raw_name = match.group(1).strip()
+            # 移除可能的"道具"前缀
+            if raw_name.startswith('道具'):
+                raw_name = raw_name[2:].strip()
+            # 移除阵营标签（如 [收养人专用]、[Aeonreth专用]）
+            raw_name = re.sub(r'\s*\[.+?专用\]\s*$', '', raw_name)
+            params['item_name'] = raw_name.strip()
+
+        elif cmd_type == 'use_item':
+            raw_input = match.group(1).strip()
+            # 移除可能的"道具"前缀
+            if raw_input.startswith('道具'):
+                raw_input = raw_input[2:].strip()
+
+            # 尝试分离道具名称和参数
+            # 格式1: "一斤鸭梨！ 3,1,6" (骰子点数)
+            # 格式2: "一斤鸭梨！ [3,1,6]"
+            parts = raw_input.split(maxsplit=1)
+            item_name = parts[0]
+
+            # 移除阵营标签（如 [收养人专用]、[Aeonreth专用]）
+            item_name = re.sub(r'\s*\[.+?专用\]\s*$', '', item_name)
+            params['item_name'] = item_name.strip()
+
+            # 如果有额外参数，尝试解析
+            if len(parts) > 1:
+                param_str = parts[1].strip()
+                # 移除方括号（如果有）
+                param_str = param_str.strip('[]')
+                # 尝试解析为数字列表（骰子点数，用于一斤鸭梨！等道具）
+                try:
+                    if ',' in param_str:
+                        params['reroll_values'] = [int(x.strip()) for x in param_str.split(',')]
+                    else:
+                        params['extra_param'] = param_str
+                except ValueError:
+                    params['extra_param'] = param_str
+
+        elif cmd_type == 'make_choice':
+            params['choice'] = match.group(1).strip()
 
         return params
 
@@ -165,7 +208,12 @@ class CommandParser:
 
 🛒 道具商店
 • 购买道具名称 - 购买道具
+• 使用道具名称 - 使用道具
+• 使用一斤鸭梨！ 3,1,6 - 重投指定点数的3个骰子
 • 添加道具名称到道具商店 - 解锁道具
+
+🎭 遭遇选择
+• 选择：打歌! - 对遭遇进行选择
 
 😺 特殊功能
 • 摸摸喵 - 每天限5次
@@ -196,6 +244,8 @@ COMMAND_HANDLERS = {
     'claim_super': 'claim_reward',  # 映射到同一个方法
     'claim_top': 'claim_column_top',
     'buy_item': 'buy_item',
+    'use_item': 'use_item',
+    'make_choice': 'make_choice',
     'pet_cat': 'pet_cat',
     'feed_cat': 'feed_cat',
     'squeeze_doll': 'squeeze_doll',

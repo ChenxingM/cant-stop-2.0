@@ -269,6 +269,65 @@ class GMWindow(QMainWindow):
 
         right_layout.addWidget(self.player_detail)
 
+        # 积分修改系统
+        score_group = QGroupBox("积分管理")
+        score_layout = QGridLayout()
+
+        # 当前选中的玩家QQ号
+        self.selected_qq_id = None
+
+        # 积分修改输入
+        score_layout.addWidget(QLabel("修改积分:"), 0, 0)
+        self.score_input = QLineEdit()
+        self.score_input.setPlaceholderText("输入积分数值（正数为增加，负数为扣除）")
+        score_layout.addWidget(self.score_input, 0, 1)
+
+        # 积分类型选择
+        score_layout.addWidget(QLabel("积分类型:"), 1, 0)
+        self.score_type_combo = QComboBox()
+        self.score_type_combo.addItems(["当前积分", "总积分", "同时修改两者"])
+        score_layout.addWidget(self.score_type_combo, 1, 1)
+
+        # 操作按钮
+        btn_row = QHBoxLayout()
+
+        add_score_btn = QPushButton("增加积分")
+        add_score_btn.clicked.connect(self._add_score)
+        add_score_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        btn_row.addWidget(add_score_btn)
+
+        set_score_btn = QPushButton("设置积分")
+        set_score_btn.clicked.connect(self._set_score)
+        set_score_btn.setStyleSheet("background-color: #2196F3; color: white;")
+        btn_row.addWidget(set_score_btn)
+
+        reset_score_btn = QPushButton("重置积分")
+        reset_score_btn.clicked.connect(self._reset_score)
+        reset_score_btn.setStyleSheet("background-color: #f44336; color: white;")
+        btn_row.addWidget(reset_score_btn)
+
+        score_layout.addLayout(btn_row, 2, 0, 1, 2)
+
+        # 快捷操作
+        quick_label = QLabel("快捷操作:")
+        score_layout.addWidget(quick_label, 3, 0)
+
+        quick_btns = QHBoxLayout()
+        for amount in [100, 500, 1000, -100, -500]:
+            btn_text = f"+{amount}" if amount > 0 else str(amount)
+            btn = QPushButton(btn_text)
+            btn.clicked.connect(lambda checked, a=amount: self._quick_add_score(a))
+            if amount > 0:
+                btn.setStyleSheet("background-color: #4CAF50; color: white;")
+            else:
+                btn.setStyleSheet("background-color: #FF9800; color: white;")
+            quick_btns.addWidget(btn)
+
+        score_layout.addLayout(quick_btns, 3, 1)
+
+        score_group.setLayout(score_layout)
+        right_layout.addWidget(score_group)
+
         # 使用分割器
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(left_widget)
@@ -352,10 +411,12 @@ class GMWindow(QMainWindow):
         """玩家选中事件"""
         selected_items = self.players_table.selectedItems()
         if not selected_items:
+            self.selected_qq_id = None
             return
 
         row = selected_items[0].row()
         qq_id = self.players_table.item(row, 0).text()
+        self.selected_qq_id = qq_id
 
         # 显示玩家详细信息
         self._show_player_detail(qq_id)
@@ -402,6 +463,117 @@ QQ号: {player.qq_id}
             detail_text += f"- {ach.achievement_name} ({ach.achievement_type})\n"
 
         self.player_detail.setText(detail_text)
+
+    def _add_score(self):
+        """增加积分"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        try:
+            amount = int(self.score_input.text())
+        except ValueError:
+            QMessageBox.warning(self, "警告", "请输入有效的数字")
+            return
+
+        self._modify_score(amount, is_add=True)
+
+    def _set_score(self):
+        """设置积分（直接覆盖）"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        try:
+            amount = int(self.score_input.text())
+        except ValueError:
+            QMessageBox.warning(self, "警告", "请输入有效的数字")
+            return
+
+        self._modify_score(amount, is_add=False)
+
+    def _reset_score(self):
+        """重置积分为0"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        reply = QMessageBox.question(
+            self, "确认", f"确定要重置玩家 {self.selected_qq_id} 的积分吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            self._modify_score(0, is_add=False)
+
+    def _quick_add_score(self, amount: int):
+        """快捷增加/扣除积分"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        self._modify_score(amount, is_add=True)
+
+    def _modify_score(self, amount: int, is_add: bool = True):
+        """修改积分的核心方法"""
+        player = self.player_dao.get_player(self.selected_qq_id)
+        if not player:
+            QMessageBox.warning(self, "错误", "玩家不存在")
+            return
+
+        score_type = self.score_type_combo.currentText()
+        cursor = self.db_conn.cursor()
+
+        try:
+            if score_type == "当前积分":
+                if is_add:
+                    new_score = player.current_score + amount
+                else:
+                    new_score = amount
+
+                cursor.execute(
+                    "UPDATE players SET current_score = ? WHERE qq_id = ?",
+                    (max(0, new_score), self.selected_qq_id)
+                )
+                msg = f"当前积分已{'增加' if is_add else '设置为'} {amount if is_add else new_score}"
+
+            elif score_type == "总积分":
+                if is_add:
+                    new_score = player.total_score + amount
+                else:
+                    new_score = amount
+
+                cursor.execute(
+                    "UPDATE players SET total_score = ? WHERE qq_id = ?",
+                    (max(0, new_score), self.selected_qq_id)
+                )
+                msg = f"总积分已{'增加' if is_add else '设置为'} {amount if is_add else new_score}"
+
+            else:  # 同时修改两者
+                if is_add:
+                    new_current = player.current_score + amount
+                    new_total = player.total_score + amount
+                else:
+                    new_current = amount
+                    new_total = amount
+
+                cursor.execute(
+                    "UPDATE players SET current_score = ?, total_score = ? WHERE qq_id = ?",
+                    (max(0, new_current), max(0, new_total), self.selected_qq_id)
+                )
+                msg = f"当前积分和总积分已{'增加' if is_add else '设置为'} {amount if is_add else new_total}"
+
+            self.db_conn.commit()
+            QMessageBox.information(self, "成功", msg)
+
+            # 刷新显示
+            self.refresh_players()
+            self._show_player_detail(self.selected_qq_id)
+            self.score_input.clear()
+
+        except Exception as e:
+            self.db_conn.rollback()
+            QMessageBox.critical(self, "错误", f"修改失败: {str(e)}")
 
     def _unlock_all_items(self):
         """解锁所有道具"""
