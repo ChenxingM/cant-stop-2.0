@@ -175,7 +175,7 @@ class ContentHandler:
             7: self._trap_thunder_king,    # 雷电法王
             8: self._trap_duel,           # 中门对狙
             9: self._trap_portal,         # 传送门
-            10: self._trap_thorns,        # 刺儿扎扎
+            10: self._trap_thorns,        # 扎扎实实
             11: self._trap_hesitate,      # 犹豫就会败北
             12: self._trap_octopus,       # 七色章鱼
             13: self._trap_hollow,        # 中空格子
@@ -229,7 +229,8 @@ class ContentHandler:
     def _trap_white_hook(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱4: 白色天○钩"""
         return "巨大的钩子将你拉起并向后移动\n当前列进度回退两格", {
-            'retreat': 2
+            'retreat': 2,
+            'column': column
         }
 
     def _trap_closed_door(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
@@ -260,7 +261,8 @@ class ContentHandler:
         """陷阱9: 传送门"""
         target_column = random.randint(3, 18)
         return f"你被传送到了随机列...\n传送目标：第{target_column}列", {
-            'teleport_to': target_column
+            'teleport_to': target_column,
+            'column': column
         }
 
     def _trap_thorns(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
@@ -298,10 +300,14 @@ class ContentHandler:
         return f"你的道心破碎了...\n积分减少1/4 (-{loss})", {}
 
     def _trap_witch_house(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
-        """陷阱15: 魔女的小屋"""
+        """陷阱15: 魔女的小屋
+
+        注意：这个陷阱需要玩家选择，应该作为遭遇处理，而不是普通陷阱
+        """
         return "你能来帮帮忙吗？\n请选择：帮忙 或 离开", {
             'requires_choice': True,
-            'choices': ['帮忙', '离开']
+            'choices': ['帮忙', '离开'],
+            'column': column
         }
 
     def _trap_witch_disturb(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
@@ -1791,7 +1797,7 @@ class ContentHandler:
             return ContentResult(True,
                                "你吃下了蘑菇，身体不断变大！下次投掷所有结果+1",
                                {'all_dice_plus': 1})
-        else:
+        elif choice == "不吃":
             return ContentResult(True, "看起来有毒，还是算了")
 
     def _use_shrink_potion(self, qq_id: str, choice: str = None, **kwargs) -> ContentResult:
@@ -1806,7 +1812,7 @@ class ContentHandler:
             return ContentResult(True,
                                "你喝下了药水，身体不断缩小！下次投掷所有结果-1",
                                {'all_dice_minus': 1})
-        else:
+        elif choice == "不喝":
             return ContentResult(True, "陌生人给的不能随便喝，还是算了")
 
     def _use_super_cannon(self, qq_id: str, desired_rolls: list = None, **kwargs) -> ContentResult:
@@ -1830,7 +1836,7 @@ class ContentHandler:
             return ContentResult(True,
                                "这使你充满了决心！本次移动的临时标记转换为永久标记且你可以继续进行当前轮次",
                                {'temp_to_permanent': True, 'continue_round': True})
-        else:
+        elif choice == "不互动":
             return ContentResult(True, "你走了")
 
     def _use_ae_mirror(self, qq_id: str, specified_rolls: list = None, **kwargs) -> ContentResult:
@@ -1867,7 +1873,7 @@ class ContentHandler:
             return ContentResult(True,
                                "小女孩拉拉你的手。下个陷阱可以通过绘制相关内容免疫",
                                {'trap_immunity_draw': True})
-        else:
+        elif choice == "拽拽腿":
             return ContentResult(True, "小女孩踹了你一脚，有点疼疼的")
 
     def _use_bonfire(self, qq_id: str, **kwargs) -> ContentResult:

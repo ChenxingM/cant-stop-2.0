@@ -110,7 +110,7 @@ class GameEngine:
         state = self.state_dao.get_state(qq_id)
 
         # 检查是否有待完成的遭遇选择
-        if state.pending_encounter:
+        if state.pending_encounters:
             return GameResult(False, "⚠️ 您还有待完成的遭遇选择，请先完成选择！\n使用指令：选择：你的选择")
 
         if not state.current_round_active:
@@ -136,6 +136,34 @@ class GameEngine:
         cost = 10  # 默认每回合10积分
         if not self.player_dao.consume_score(qq_id, cost):
             return GameResult(False, f"积分不足，需要{cost}积分")
+
+        # 确定骰子数量（可能被陷阱效果修改）
+        if state.next_dice_count:
+            dice_count = state.next_dice_count
+            dice_groups = state.next_dice_groups
+            # 清除效果
+            state.next_dice_count = None
+            state.next_dice_groups = None
+            self.state_dao.update_state(state)
+
+        # 检查是否有固定骰子效果（小小火球术）
+        if state.next_dice_fixed:
+            results = state.next_dice_fixed
+            # 清除效果
+            state.next_dice_fixed = None
+            state.last_dice_result = results
+            state.dice_history.append(results)
+            self.state_dao.update_state(state)
+
+            # 计算可能的组合
+            possible_sums = self._get_possible_sums(results)
+            combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)])
+
+            message = f"🎲固定骰子结果: {' '.join(map(str, results))}\n可能的组合: {combinations_str}"
+            return GameResult(True, message, {
+                "results": results,
+                "possible_sums": possible_sums
+            })
 
         # 检查是否有额外d6检查效果
         if state.extra_d6_check_six:
@@ -182,6 +210,60 @@ class GameEngine:
             results = [random.randint(1, 6) for _ in range(dice_count)]
             state.last_dice_result = results
             state.dice_history.append(results)
+
+            # 检查奇偶检定（陷阱6: 奇变偶不变）
+            if state.odd_even_check_active:
+                state.odd_even_check_active = False
+                odd_count = sum(1 for r in results if r % 2 == 1)
+                if odd_count > 3:
+                    # 通过检定，获得额外d6
+                    extra_die = random.randint(1, 6)
+                    self.state_dao.update_state(state)
+                    message = (f"🎲投掷结果: {' '.join(map(str, results))}\n"
+                              f"✨ 奇偶检定：奇数{odd_count}个 > 3，通过！\n"
+                              f"额外d6: {extra_die}，可以随意加到任意组合中")
+                    # 这里暂时只返回提示，实际加值需要在记录数值时处理
+                    return GameResult(True, message, {
+                        "results": results,
+                        "extra_die": extra_die
+                    })
+                else:
+                    # 未通过检定，本回合作废
+                    state.last_dice_result = None
+                    self.state_dao.update_state(state)
+                    return GameResult(False,
+                                   f"🎲投掷结果: {' '.join(map(str, results))}\n"
+                                   f"❌ 奇偶检定：奇数{odd_count}个 ≤ 3，未通过！本回合作废")
+
+            # 检查数学检定（陷阱7: 雷电法王）
+            if state.math_check_active:
+                state.math_check_active = False
+                possible_sums = self._get_possible_sums(results)
+                unique_values = set()
+                for sum1, sum2 in possible_sums:
+                    unique_values.add(sum1)
+                    unique_values.add(sum2)
+                unique_count = len(unique_values)
+                self.state_dao.update_state(state)
+
+                if unique_count >= 8:
+                    # 通过检定
+                    combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)])
+                    message = (f"🎲投掷结果: {' '.join(map(str, results))}\n"
+                              f"✨ 数学检定：可得到{unique_count}种不同数字 ≥ 8，通过！\n"
+                              f"可能的组合: {combinations_str}")
+                    return GameResult(True, message, {
+                        "results": results,
+                        "possible_sums": possible_sums
+                    })
+                else:
+                    # 未通过检定，本回合作废
+                    state.last_dice_result = None
+                    self.state_dao.update_state(state)
+                    return GameResult(False,
+                                   f"🎲投掷结果: {' '.join(map(str, results))}\n"
+                                   f"❌ 数学检定：可得到{unique_count}种不同数字 < 8，未通过！本回合作废")
+
             self.state_dao.update_state(state)
 
             # 检查特殊成就
@@ -232,7 +314,7 @@ class GameEngine:
         state = self.state_dao.get_state(qq_id)
 
         # 检查是否有待完成的遭遇选择
-        if state.pending_encounter:
+        if state.pending_encounters:
             return GameResult(False, "⚠️ 您还有待完成的遭遇选择，请先完成选择！\n使用指令：选择：你的选择")
 
         if not state.current_round_active:
@@ -308,6 +390,10 @@ class GameEngine:
         # 更新临时标记使用数量
         state.temp_markers_used = len(set(p.column_number for p in self.position_dao.get_positions(qq_id, 'temp')))
 
+        # 处理强制回合效果（犹豫就会败北）
+        if state.forced_remaining_rounds > 0:
+            state.forced_remaining_rounds -= 1
+
         # 清除骰子结果，要求玩家在下次记录数值前必须重新投掷骰子
         state.last_dice_result = None
         self.state_dao.update_state(state)
@@ -374,11 +460,15 @@ class GameEngine:
         state = self.state_dao.get_state(qq_id)
 
         # 检查是否有待完成的遭遇选择
-        if state.pending_encounter:
+        if state.pending_encounters:
             return GameResult(False, "⚠️ 您还有待完成的遭遇选择，请先完成选择！\n使用指令：选择：你的选择")
 
         if not state.current_round_active:
             return GameResult(False, "当前没有进行中的轮次")
+
+        # 检查是否有强制轮次效果（犹豫就会败北）
+        if state.forced_remaining_rounds > 0:
+            return GameResult(False, f"⚠️ 您还需要再进行 {state.forced_remaining_rounds} 回合才能结束轮次！\n（陷阱效果：犹豫就会败北）")
 
         # 将临时标记转换为永久标记
         self.position_dao.convert_temp_to_permanent(qq_id)
@@ -409,7 +499,7 @@ class GameEngine:
         state = self.state_dao.get_state(qq_id)
 
         # 检查是否有待完成的遭遇选择
-        if state.pending_encounter:
+        if state.pending_encounters:
             return GameResult(False, "⚠️ 您还有待完成的遭遇选择，请先完成选择！\n使用指令：选择：你的选择")
 
         if not state.current_round_active:
@@ -710,15 +800,22 @@ class GameEngine:
         """
         state = self.state_dao.get_state(qq_id)
 
-        if not state.pending_encounter:
+        if not state.pending_encounters:
             return GameResult(False, "当前没有等待选择的遭遇或道具")
 
-        # 获取等待选择的遭遇信息
-        encounter_info = state.pending_encounter
+        # 获取队列中第一个等待选择的遭遇信息
+        encounter_info = state.pending_encounters[0]
         column = encounter_info['column']
         position = encounter_info['position']
         encounter_id = encounter_info['encounter_id']
         encounter_name = encounter_info['encounter_name']
+        available_choices = encounter_info.get('choices', [])
+
+        # 验证选择是否有效
+        if available_choices and choice not in available_choices:
+            choices_str = '\n'.join([f"• {c}" for c in available_choices])
+            return GameResult(False,
+                            f"❌ 无效的选择！请从以下选项中选择：\n{choices_str}")
 
         # 调用content_handler处理选择
         try:
@@ -726,14 +823,26 @@ class GameEngine:
                 qq_id, encounter_id, encounter_name, is_first=True, choice=choice
             )
 
-            # 清除等待选择的遭遇
-            state.pending_encounter = None
-            self.state_dao.update_state(state)
+            # 从队列中移除已处理的遭遇
+            state.pending_encounters.pop(0)
 
             # 应用效果
             if result.effects:
                 self._apply_content_effects(qq_id, result.effects)
 
+            # 检查是否还有待处理的遭遇
+            if state.pending_encounters:
+                next_encounter = state.pending_encounters[0]
+                next_choices = next_encounter.get('choices', [])
+                if next_choices:
+                    choices_str = '\n'.join([f"• {c}" for c in next_choices])
+                    additional_msg = (f"\n\n⚠️ 您还有待处理的遭遇：{next_encounter['encounter_name']}\n"
+                                    f"请选择：\n{choices_str}\n\n"
+                                    f"💡 使用「选择：你的选择」来进行选择")
+                    self.state_dao.update_state(state)
+                    return GameResult(True, result.message + additional_msg)
+
+            self.state_dao.update_state(state)
             return GameResult(True, result.message)
 
         except Exception as e:
@@ -793,12 +902,15 @@ class GameEngine:
             # 如果遭遇需要玩家选择，保存遭遇信息
             if result and result.requires_input and cell_type == "E":
                 state = self.state_dao.get_state(qq_id)
-                state.pending_encounter = {
+                # 添加到待处理队列（而不是覆盖）
+                encounter_info = {
                     'column': column,
                     'position': position,
                     'encounter_id': content_id,
-                    'encounter_name': content_name
+                    'encounter_name': content_name,
+                    'choices': result.choices
                 }
+                state.pending_encounters.append(encounter_info)
                 self.state_dao.update_state(state)
 
                 # 添加选择提示到消息
@@ -821,13 +933,11 @@ class GameEngine:
 
         Args:
             qq_id: 玩家QQ号
-            effects: 效果字典，可能包含：
-                - skip_rounds: 暂停的回合数
-                - force_end_round: 强制结束轮次
-                - clear_current_column: 清空当前列进度
-                - 其他效果...
+            effects: 效果字典，可能包含各种效果
         """
         state = self.state_dao.get_state(qq_id)
+
+        # ==================== 回合控制效果 ====================
 
         # 处理暂停回合效果
         if 'skip_rounds' in effects:
@@ -843,20 +953,143 @@ class GameEngine:
             state.temp_markers_used = 0
             print(f"[效果应用] {qq_id} 被强制结束轮次")
 
+        # 处理强制轮次效果（犹豫就会败北）
+        if 'force_rounds' in effects:
+            state.forced_remaining_rounds = effects['force_rounds']
+            print(f"[效果应用] {qq_id} 必须再进行 {state.forced_remaining_rounds} 回合才能结束轮次")
+
+        # ==================== 位置相关效果 ====================
+
         # 处理清空当前列进度效果
         if effects.get('clear_current_column') and 'column' in effects:
             column = effects['column']
-            # 清除该列的临时标记
             self.position_dao.clear_temp_position_by_column(qq_id, column)
             print(f"[效果应用] {qq_id} 清空列{column}的临时进度")
+
+        # 处理回退效果（白色天○钩）
+        if 'retreat' in effects and 'column' in effects:
+            retreat_count = effects['retreat']
+            column = effects['column']
+            self._retreat_position(qq_id, column, retreat_count)
+            print(f"[效果应用] {qq_id} 在列{column}回退 {retreat_count} 格")
+
+        # 处理所有列回退效果（七色章鱼）
+        if 'retreat_all' in effects:
+            retreat_count = effects['retreat_all']
+            positions = self.position_dao.get_positions(qq_id, 'temp')
+            for pos in positions:
+                self._retreat_position(qq_id, pos.column_number, retreat_count)
+            print(f"[效果应用] {qq_id} 所有临时标记回退 {retreat_count} 格")
+
+        # 处理随机回退效果（没有空军）
+        if 'random_retreat' in effects:
+            retreat_count = effects['random_retreat']
+            positions = self.position_dao.get_positions(qq_id, 'temp')
+            if positions:
+                import random
+                random_pos = random.choice(positions)
+                self._retreat_position(qq_id, random_pos.column_number, retreat_count)
+                print(f"[效果应用] {qq_id} 随机回退列{random_pos.column_number} {retreat_count} 格")
+
+        # 处理传送效果（传送门）
+        if 'teleport_to' in effects and 'column' in effects:
+            target_column = effects['teleport_to']
+            source_column = effects['column']
+            # 清除原列的临时标记
+            self.position_dao.clear_temp_position_by_column(qq_id, source_column)
+            # 在目标列设置标记
+            permanent_pos = next((p for p in self.position_dao.get_positions(qq_id, 'permanent')
+                                if p.column_number == target_column), None)
+            if permanent_pos:
+                # 有永久标记，放在永久标记+1位置
+                self.position_dao.add_or_update_position(qq_id, target_column, permanent_pos.position + 1, 'temp')
+                print(f"[效果应用] {qq_id} 传送到列{target_column}，位置{permanent_pos.position + 1}")
+            else:
+                # 检查该列是否已有临时标记
+                temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+                has_temp = any(p.column_number == target_column for p in temp_positions)
+                if not has_temp:
+                    # 没有标记，放在第1格
+                    self.position_dao.add_or_update_position(qq_id, target_column, 1, 'temp')
+                    print(f"[效果应用] {qq_id} 传送到列{target_column}，位置1")
+                else:
+                    print(f"[效果应用] {qq_id} 传送失败，目标列{target_column}已有临时标记")
+
+        # ==================== 骰子相关效果 ====================
 
         # 处理额外d6检查效果
         if effects.get('extra_d6_check_six'):
             state.extra_d6_check_six = True
             print(f"[效果应用] {qq_id} 下次投骰将额外投一个d6，如果是6则本回合作废")
 
+        # 处理固定骰子效果（小小火球术）
+        if 'next_dice_fixed' in effects:
+            state.next_dice_fixed = effects['next_dice_fixed']
+            print(f"[效果应用] {qq_id} 下回合骰子结果固定为 {state.next_dice_fixed}")
+
+        # 处理骰子数量改变效果（LUCKY DAY）
+        if 'next_dice_count' in effects:
+            state.next_dice_count = effects['next_dice_count']
+            if 'next_dice_groups' in effects:
+                state.next_dice_groups = effects['next_dice_groups']
+            print(f"[效果应用] {qq_id} 下回合只投掷 {state.next_dice_count} 个骰子")
+
+        # 处理奇偶检定效果
+        if effects.get('odd_even_check'):
+            state.odd_even_check_active = True
+            print(f"[效果应用] {qq_id} 下回合将进行奇偶检定")
+
+        # 处理数学检定效果
+        if effects.get('math_check'):
+            state.math_check_active = True
+            print(f"[效果应用] {qq_id} 下回合将进行数学检定")
+
+        # ==================== 特殊效果 ====================
+
+        # 处理锁定时间效果（非请勿入）
+        if 'lockout_hours' in effects:
+            from datetime import datetime, timedelta
+            lockout_hours = effects['lockout_hours']
+            lockout_time = datetime.now() + timedelta(hours=lockout_hours)
+            state.lockout_until = lockout_time.isoformat()
+            print(f"[效果应用] {qq_id} 被锁定 {lockout_hours} 小时，直到 {lockout_time}")
+
+        # 处理需要选择的陷阱（魔女的小屋）
+        if effects.get('requires_choice') and 'choices' in effects:
+            # 这个由 game_engine 中的 _trigger_cell_content 处理
+            pass
+
         # 保存状态
         self.state_dao.update_state(state)
+
+    def _retreat_position(self, qq_id: str, column: int, retreat_count: int):
+        """回退指定列的位置
+
+        Args:
+            qq_id: 玩家QQ号
+            column: 列号
+            retreat_count: 回退格数
+        """
+        temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+        temp_pos = next((p for p in temp_positions if p.column_number == column), None)
+
+        if not temp_pos:
+            return
+
+        # 计算新位置
+        new_position = max(1, temp_pos.position - retreat_count)
+
+        # 检查是否有永久标记
+        permanent_positions = self.position_dao.get_positions(qq_id, 'permanent')
+        permanent_pos = next((p for p in permanent_positions if p.column_number == column), None)
+
+        if permanent_pos:
+            # 如果回退后的位置<=永久标记位置，则临时标记应该在永久标记+1的位置
+            if new_position <= permanent_pos.position:
+                new_position = permanent_pos.position + 1
+
+        # 更新位置
+        self.position_dao.add_or_update_position(qq_id, column, new_position, 'temp')
 
     def _check_dice_achievements(self, qq_id: str, results: List[int]):
         """检查骰子相关成就"""

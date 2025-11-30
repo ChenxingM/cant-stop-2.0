@@ -60,8 +60,19 @@ class PlayerGameState:
     last_dice_result: Optional[List[int]] = None
     topped_columns: List[int] = field(default_factory=list)
     skipped_rounds: int = 0  # 被暂停的回合数
-    pending_encounter: Optional[Dict] = None  # 等待选择的遭遇信息 {column, position, encounter_id, encounter_name}
+    pending_encounter: Optional[Dict] = None  # 等待选择的遭遇信息 {column, position, encounter_id, encounter_name} (已废弃，保留兼容)
+    pending_encounters: List[Dict] = field(default_factory=list)  # 等待选择的遭遇队列
     extra_d6_check_six: bool = False  # 下次投骰额外投一个d6，如果是6则本回合作废
+
+    # 陷阱效果相关状态
+    next_dice_fixed: Optional[List[int]] = None  # 下回合固定骰子结果
+    next_dice_count: Optional[int] = None  # 下回合骰子数量
+    next_dice_groups: Optional[List[int]] = None  # 下回合骰子分组方式
+    forced_remaining_rounds: int = 0  # 强制进行的剩余回合数
+    odd_even_check_active: bool = False  # 奇偶检定激活
+    math_check_active: bool = False  # 数学检定激活
+    lockout_until: Optional[str] = None  # 锁定到的时间（ISO格式字符串）
+    pending_trap_choice: Optional[Dict] = None  # 等待处理的陷阱选择
 
     def to_dict(self) -> dict:
         """转换为字典（用于存储）"""
@@ -74,7 +85,16 @@ class PlayerGameState:
             'topped_columns': json.dumps(self.topped_columns),
             'skipped_rounds': self.skipped_rounds,
             'pending_encounter': json.dumps(self.pending_encounter) if self.pending_encounter else None,
-            'extra_d6_check_six': int(self.extra_d6_check_six)
+            'pending_encounters': json.dumps(self.pending_encounters),
+            'extra_d6_check_six': int(self.extra_d6_check_six),
+            'next_dice_fixed': json.dumps(self.next_dice_fixed) if self.next_dice_fixed else None,
+            'next_dice_count': self.next_dice_count,
+            'next_dice_groups': json.dumps(self.next_dice_groups) if self.next_dice_groups else None,
+            'forced_remaining_rounds': self.forced_remaining_rounds,
+            'odd_even_check_active': int(self.odd_even_check_active),
+            'math_check_active': int(self.math_check_active),
+            'lockout_until': self.lockout_until,
+            'pending_trap_choice': json.dumps(self.pending_trap_choice) if self.pending_trap_choice else None
         }
 
     @staticmethod
@@ -93,6 +113,18 @@ class PlayerGameState:
         pending_encounter_raw = data.get('pending_encounter')
         pending_encounter = json.loads(pending_encounter_raw) if pending_encounter_raw else None
 
+        pending_encounters_raw = data.get('pending_encounters')
+        pending_encounters = json.loads(pending_encounters_raw) if pending_encounters_raw else []
+
+        next_dice_fixed_raw = data.get('next_dice_fixed')
+        next_dice_fixed = json.loads(next_dice_fixed_raw) if next_dice_fixed_raw else None
+
+        next_dice_groups_raw = data.get('next_dice_groups')
+        next_dice_groups = json.loads(next_dice_groups_raw) if next_dice_groups_raw else None
+
+        pending_trap_choice_raw = data.get('pending_trap_choice')
+        pending_trap_choice = json.loads(pending_trap_choice_raw) if pending_trap_choice_raw else None
+
         return PlayerGameState(
             qq_id=qq_id,
             current_round_active=bool(data.get('current_round_active', 0)),
@@ -103,7 +135,16 @@ class PlayerGameState:
             topped_columns=topped_columns,
             skipped_rounds=data.get('skipped_rounds', 0),
             pending_encounter=pending_encounter,
-            extra_d6_check_six=bool(data.get('extra_d6_check_six', 0))
+            pending_encounters=pending_encounters,
+            extra_d6_check_six=bool(data.get('extra_d6_check_six', 0)),
+            next_dice_fixed=next_dice_fixed,
+            next_dice_count=data.get('next_dice_count'),
+            next_dice_groups=next_dice_groups,
+            forced_remaining_rounds=data.get('forced_remaining_rounds', 0),
+            odd_even_check_active=bool(data.get('odd_even_check_active', 0)),
+            math_check_active=bool(data.get('math_check_active', 0)),
+            lockout_until=data.get('lockout_until'),
+            pending_trap_choice=pending_trap_choice
         )
 
 

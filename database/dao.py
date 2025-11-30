@@ -357,7 +357,16 @@ class GameStateDAO:
                 topped_columns = ?,
                 skipped_rounds = ?,
                 pending_encounter = ?,
-                extra_d6_check_six = ?
+                pending_encounters = ?,
+                extra_d6_check_six = ?,
+                next_dice_fixed = ?,
+                next_dice_count = ?,
+                next_dice_groups = ?,
+                forced_remaining_rounds = ?,
+                odd_even_check_active = ?,
+                math_check_active = ?,
+                lockout_until = ?,
+                pending_trap_choice = ?
             WHERE qq_id = ?
         ''', (
             data['current_round_active'],
@@ -368,7 +377,16 @@ class GameStateDAO:
             data['topped_columns'],
             data['skipped_rounds'],
             data['pending_encounter'],
+            data['pending_encounters'],
             data['extra_d6_check_six'],
+            data['next_dice_fixed'],
+            data['next_dice_count'],
+            data['next_dice_groups'],
+            data['forced_remaining_rounds'],
+            data['odd_even_check_active'],
+            data['math_check_active'],
+            data['lockout_until'],
+            data['pending_trap_choice'],
             state.qq_id
         ))
         self.conn.commit()

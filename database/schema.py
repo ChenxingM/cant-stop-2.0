@@ -104,6 +104,52 @@ class DatabaseSchema:
         except sqlite3.OperationalError:
             pass
 
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN pending_encounters TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        # 陷阱效果相关字段
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN next_dice_fixed TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN next_dice_count INTEGER')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN next_dice_groups TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN forced_remaining_rounds INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN odd_even_check_active INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN math_check_active INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN lockout_until TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN pending_trap_choice TEXT')
+        except sqlite3.OperationalError:
+            pass
+
         # ==================== 商店道具表 ====================
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS shop_items (
