@@ -21,8 +21,9 @@ from PySide6.QtCore import Qt, QTimer, Signal, QSize
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush
 
 from database.schema import init_database
-from database.dao import PlayerDAO, PositionDAO, ShopDAO, AchievementDAO
+from database.dao import PlayerDAO, PositionDAO, ShopDAO, AchievementDAO, InventoryDAO, GameStateDAO
 from data.board_config import BOARD_DATA, COLUMN_HEIGHTS, VALID_COLUMNS
+from datetime import datetime, timedelta
 
 
 class BoardWidget(QWidget):
@@ -33,6 +34,7 @@ class BoardWidget(QWidget):
         self.setMinimumSize(1200, 600)
         self.players_positions = {}  # {qq_id: [(column, position, marker_type), ...]}
         self.cell_contents = {}  # 从BOARD_DATA加载
+        self.gem_pools = []  # 宝石池沼列表 [{gem_type, column_number, position, owner_name}, ...]
 
         self._load_cell_contents()
 
@@ -45,6 +47,11 @@ class BoardWidget(QWidget):
     def update_positions(self, positions_dict: dict):
         """更新玩家位置"""
         self.players_positions = positions_dict
+        self.update()
+
+    def update_gem_pools(self, gem_pools: list):
+        """更新宝石池沼位置"""
+        self.gem_pools = gem_pools
         self.update()
 
     def paintEvent(self, event):
@@ -96,6 +103,9 @@ class BoardWidget(QWidget):
                 # 绘制玩家标记
                 self._draw_markers(painter, col_num, pos, x, y, cell_width, cell_height)
 
+                # 绘制宝石/池沼
+                self._draw_gems(painter, col_num, pos, x, y, cell_width, cell_height)
+
         # 绘制图例
         self._draw_legend(painter)
 
@@ -129,6 +139,62 @@ class BoardWidget(QWidget):
                 offset_x = x + width - marker_size - 2 - i * (marker_size + 2)
                 offset_y = y + 2
                 painter.drawRect(offset_x, offset_y, marker_size, marker_size)
+
+    def _draw_gems(self, painter, column, position, x, y, width, height):
+        """绘制宝石和池沼"""
+        gems_at_pos = [g for g in self.gem_pools
+                      if g.get('column_number') == column and g.get('position') == position]
+
+        if not gems_at_pos:
+            return
+
+        gem_size = 10
+        for i, gem in enumerate(gems_at_pos[:2]):  # 最多显示2个
+            gem_type = gem.get('gem_type', '')
+            offset_x = x + 2 + i * (gem_size + 2)
+            offset_y = y + height // 2 - gem_size // 2
+
+            # 根据类型设置颜色和形状
+            if gem_type == 'red_gem':
+                # 红色宝石 - 红色菱形
+                painter.setBrush(QBrush(QColor(255, 0, 0)))
+                painter.setPen(QPen(QColor(139, 0, 0), 2))
+                self._draw_diamond(painter, offset_x, offset_y, gem_size)
+            elif gem_type == 'blue_gem':
+                # 蓝色宝石 - 蓝色菱形
+                painter.setBrush(QBrush(QColor(0, 100, 255)))
+                painter.setPen(QPen(QColor(0, 0, 139), 2))
+                self._draw_diamond(painter, offset_x, offset_y, gem_size)
+            elif gem_type == 'red_pool':
+                # 红色池沼 - 红色波浪圆
+                painter.setBrush(QBrush(QColor(255, 100, 100, 180)))
+                painter.setPen(QPen(QColor(139, 0, 0), 1))
+                painter.drawEllipse(offset_x, offset_y, gem_size, gem_size)
+                # 画波浪线表示池沼
+                painter.setPen(QPen(QColor(139, 0, 0), 1))
+                painter.drawLine(offset_x + 2, offset_y + gem_size//2,
+                               offset_x + gem_size - 2, offset_y + gem_size//2)
+            elif gem_type == 'blue_pool':
+                # 蓝色池沼 - 蓝色波浪圆
+                painter.setBrush(QBrush(QColor(100, 100, 255, 180)))
+                painter.setPen(QPen(QColor(0, 0, 139), 1))
+                painter.drawEllipse(offset_x, offset_y, gem_size, gem_size)
+                # 画波浪线表示池沼
+                painter.setPen(QPen(QColor(0, 0, 139), 1))
+                painter.drawLine(offset_x + 2, offset_y + gem_size//2,
+                               offset_x + gem_size - 2, offset_y + gem_size//2)
+
+    def _draw_diamond(self, painter, x, y, size):
+        """绘制菱形（宝石形状）"""
+        from PySide6.QtGui import QPolygon
+        from PySide6.QtCore import QPoint
+        points = QPolygon([
+            QPoint(x + size // 2, y),           # 上
+            QPoint(x + size, y + size // 2),    # 右
+            QPoint(x + size // 2, y + size),    # 下
+            QPoint(x, y + size // 2)            # 左
+        ])
+        painter.drawPolygon(points)
 
     def _draw_legend(self, painter):
         """绘制图例"""
@@ -169,6 +235,37 @@ class BoardWidget(QWidget):
         painter.drawEllipse(legend_x, legend_y + 140, 12, 12)
         painter.drawText(legend_x + 17, legend_y + 150, "永久")
 
+        # 宝石池沼图例
+        painter.drawText(legend_x, legend_y + 180, "宝石/池沼:")
+
+        # 红色宝石
+        painter.setBrush(QBrush(QColor(255, 0, 0)))
+        painter.setPen(QPen(QColor(139, 0, 0), 2))
+        self._draw_diamond(painter, legend_x, legend_y + 195, 12)
+        painter.setPen(QPen(Qt.black))
+        painter.drawText(legend_x + 17, legend_y + 205, "红宝石")
+
+        # 蓝色宝石
+        painter.setBrush(QBrush(QColor(0, 100, 255)))
+        painter.setPen(QPen(QColor(0, 0, 139), 2))
+        self._draw_diamond(painter, legend_x, legend_y + 215, 12)
+        painter.setPen(QPen(Qt.black))
+        painter.drawText(legend_x + 17, legend_y + 225, "蓝宝石")
+
+        # 红色池沼
+        painter.setBrush(QBrush(QColor(255, 100, 100, 180)))
+        painter.setPen(QPen(QColor(139, 0, 0), 1))
+        painter.drawEllipse(legend_x, legend_y + 235, 12, 12)
+        painter.setPen(QPen(Qt.black))
+        painter.drawText(legend_x + 17, legend_y + 245, "红池沼")
+
+        # 蓝色池沼
+        painter.setBrush(QBrush(QColor(100, 100, 255, 180)))
+        painter.setPen(QPen(QColor(0, 0, 139), 1))
+        painter.drawEllipse(legend_x, legend_y + 255, 12, 12)
+        painter.setPen(QPen(Qt.black))
+        painter.drawText(legend_x + 17, legend_y + 265, "蓝池沼")
+
 
 class GMWindow(QMainWindow):
     """GM管理主窗口"""
@@ -184,6 +281,8 @@ class GMWindow(QMainWindow):
         self.position_dao = PositionDAO(self.db_conn)
         self.shop_dao = ShopDAO(self.db_conn)
         self.achievement_dao = AchievementDAO(self.db_conn)
+        self.inventory_dao = InventoryDAO(self.db_conn)
+        self.state_dao = GameStateDAO(self.db_conn)
 
         # 初始化UI
         self._init_ui()
@@ -251,8 +350,8 @@ class GMWindow(QMainWindow):
         left_layout.addWidget(QLabel("玩家列表"))
 
         self.players_table = QTableWidget()
-        self.players_table.setColumnCount(5)
-        self.players_table.setHorizontalHeaderLabels(["QQ号", "昵称", "阵营", "当前积分", "总积分"])
+        self.players_table.setColumnCount(6)
+        self.players_table.setHorizontalHeaderLabels(["QQ号", "昵称", "阵营", "当前积分", "总积分", "锁定状态"])
         self.players_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.players_table.itemSelectionChanged.connect(self._on_player_selected)
 
@@ -327,6 +426,73 @@ class GMWindow(QMainWindow):
 
         score_group.setLayout(score_layout)
         right_layout.addWidget(score_group)
+
+        # 道具派发系统
+        item_group = QGroupBox("道具派发")
+        item_layout = QGridLayout()
+
+        # 道具选择下拉框
+        item_layout.addWidget(QLabel("选择道具:"), 0, 0)
+        self.item_combo = QComboBox()
+        self.item_combo.setMinimumWidth(200)
+        item_layout.addWidget(self.item_combo, 0, 1)
+
+        # 数量输入
+        item_layout.addWidget(QLabel("数量:"), 1, 0)
+        self.item_quantity_input = QLineEdit()
+        self.item_quantity_input.setText("1")
+        self.item_quantity_input.setPlaceholderText("输入数量")
+        item_layout.addWidget(self.item_quantity_input, 1, 1)
+
+        # 派发按钮
+        give_item_btn = QPushButton("派发道具")
+        give_item_btn.clicked.connect(self._give_item)
+        give_item_btn.setStyleSheet("background-color: #9C27B0; color: white;")
+        item_layout.addWidget(give_item_btn, 2, 0, 1, 2)
+
+        item_group.setLayout(item_layout)
+        right_layout.addWidget(item_group)
+
+        # 锁定管理系统
+        lockout_group = QGroupBox("锁定管理")
+        lockout_layout = QGridLayout()
+
+        # 锁定状态显示
+        lockout_layout.addWidget(QLabel("锁定状态:"), 0, 0)
+        self.lockout_status_label = QLabel("未选择玩家")
+        self.lockout_status_label.setStyleSheet("font-weight: bold;")
+        lockout_layout.addWidget(self.lockout_status_label, 0, 1)
+
+        # 倒计时显示
+        lockout_layout.addWidget(QLabel("剩余时间:"), 1, 0)
+        self.lockout_countdown_label = QLabel("-")
+        self.lockout_countdown_label.setStyleSheet("color: #f44336; font-weight: bold;")
+        lockout_layout.addWidget(self.lockout_countdown_label, 1, 1)
+
+        # 锁定时长输入
+        lockout_layout.addWidget(QLabel("锁定时长(小时):"), 2, 0)
+        self.lockout_hours_input = QLineEdit()
+        self.lockout_hours_input.setText("12")
+        self.lockout_hours_input.setPlaceholderText("输入锁定小时数")
+        lockout_layout.addWidget(self.lockout_hours_input, 2, 1)
+
+        # 操作按钮
+        lockout_btn_row = QHBoxLayout()
+
+        lock_btn = QPushButton("锁定玩家")
+        lock_btn.clicked.connect(self._lock_player)
+        lock_btn.setStyleSheet("background-color: #f44336; color: white;")
+        lockout_btn_row.addWidget(lock_btn)
+
+        unlock_btn = QPushButton("解锁玩家")
+        unlock_btn.clicked.connect(self._unlock_player)
+        unlock_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        lockout_btn_row.addWidget(unlock_btn)
+
+        lockout_layout.addLayout(lockout_btn_row, 3, 0, 1, 2)
+
+        lockout_group.setLayout(lockout_layout)
+        right_layout.addWidget(lockout_group)
 
         # 使用分割器
         splitter = QSplitter(Qt.Horizontal)
@@ -429,6 +595,11 @@ class GMWindow(QMainWindow):
 
         positions = self.position_dao.get_positions(qq_id)
         achievements = self.achievement_dao.get_achievements(qq_id)
+        inventory = self.inventory_dao.get_inventory(qq_id)
+        state = self.state_dao.get_state(qq_id)
+
+        # 更新锁定状态显示
+        self._update_lockout_display(state)
 
         detail_text = f"""
 === 玩家信息 ===
@@ -457,6 +628,13 @@ QQ号: {player.qq_id}
                 detail_text += f"  - 列{pos.column_number}第{pos.position}格\n"
         else:
             detail_text += "\n永久标记: 无\n"
+
+        detail_text += f"\n=== 背包物品 ({len(inventory)}) ===\n"
+        if inventory:
+            for item in inventory:
+                detail_text += f"- {item.item_name} x{item.quantity}\n"
+        else:
+            detail_text += "背包为空\n"
 
         detail_text += f"\n=== 成就信息 ({len(achievements)}) ===\n"
         for ach in achievements:
@@ -575,6 +753,66 @@ QQ号: {player.qq_id}
             self.db_conn.rollback()
             QMessageBox.critical(self, "错误", f"修改失败: {str(e)}")
 
+    def _give_item(self):
+        """派发道具给选中的玩家"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        if self.item_combo.count() == 0:
+            QMessageBox.warning(self, "警告", "没有可用的道具")
+            return
+
+        # 获取选中的道具信息
+        item_data = self.item_combo.currentData()
+        if not item_data:
+            QMessageBox.warning(self, "警告", "请选择一个道具")
+            return
+
+        item_id, item_name, item_type = item_data
+
+        # 获取数量
+        try:
+            quantity = int(self.item_quantity_input.text())
+            if quantity <= 0:
+                raise ValueError()
+        except ValueError:
+            QMessageBox.warning(self, "警告", "请输入有效的正整数数量")
+            return
+
+        # 派发道具
+        try:
+            for _ in range(quantity):
+                self.inventory_dao.add_item(
+                    self.selected_qq_id,
+                    item_id,
+                    item_name,
+                    item_type
+                )
+
+            player = self.player_dao.get_player(self.selected_qq_id)
+            QMessageBox.information(
+                self, "成功",
+                f"已向玩家 {player.nickname} 派发 {quantity} 个 [{item_name}]"
+            )
+
+            # 刷新玩家详情
+            self._show_player_detail(self.selected_qq_id)
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"派发失败: {str(e)}")
+
+    def _refresh_item_combo(self):
+        """刷新道具下拉框"""
+        self.item_combo.clear()
+
+        # 从商店获取所有道具
+        items = self.shop_dao.get_all_items()
+        for item in items:
+            # 显示名称，存储 (id, name, type)
+            display_name = f"{item.item_name} ({item.faction_limit or '通用'})"
+            self.item_combo.addItem(display_name, (item.item_id, item.item_name, item.item_type))
+
     def _unlock_all_items(self):
         """解锁所有道具"""
         reply = QMessageBox.question(
@@ -608,6 +846,12 @@ QQ号: {player.qq_id}
         self.refresh_map()
         self.refresh_shop()
         self.refresh_stats()
+        self._refresh_item_combo()
+
+        # 刷新当前选中玩家的锁定倒计时
+        if self.selected_qq_id:
+            state = self.state_dao.get_state(self.selected_qq_id)
+            self._update_lockout_display(state)
 
     def refresh_players(self):
         """刷新玩家列表"""
@@ -622,6 +866,25 @@ QQ号: {player.qq_id}
             self.players_table.setItem(i, 3, QTableWidgetItem(str(player.current_score)))
             self.players_table.setItem(i, 4, QTableWidgetItem(str(player.total_score)))
 
+            # 获取锁定状态
+            state = self.state_dao.get_state(player.qq_id)
+            lockout_status = "正常"
+            if state and state.lockout_until:
+                try:
+                    lockout_time = datetime.fromisoformat(state.lockout_until)
+                    if datetime.now() < lockout_time:
+                        remaining = lockout_time - datetime.now()
+                        hours = int(remaining.total_seconds() // 3600)
+                        mins = int((remaining.total_seconds() % 3600) // 60)
+                        lockout_status = f"🔒 {hours}h{mins}m"
+                except ValueError:
+                    lockout_status = "异常"
+
+            lockout_item = QTableWidgetItem(lockout_status)
+            if lockout_status.startswith("🔒"):
+                lockout_item.setForeground(QColor(244, 67, 54))  # 红色
+            self.players_table.setItem(i, 5, lockout_item)
+
     def refresh_map(self):
         """刷新地图"""
         all_positions = self.position_dao.get_all_positions_on_map()
@@ -634,6 +897,12 @@ QQ号: {player.qq_id}
             ]
 
         self.board_widget.update_positions(positions_dict)
+
+        # 刷新宝石池沼
+        from database.dao import GemPoolDAO
+        gem_dao = GemPoolDAO(self.db_conn)
+        gem_pools = gem_dao.get_all_active_gems()
+        self.board_widget.update_gem_pools(gem_pools)
 
     def refresh_shop(self):
         """刷新商店"""
@@ -661,6 +930,112 @@ QQ号: {player.qq_id}
         self.stats_labels["总积分发放"].setText(str(total_score))
 
         # TODO: 添加更多统计
+
+    def _update_lockout_display(self, state):
+        """更新锁定状态显示"""
+        if not state or not state.lockout_until:
+            self.lockout_status_label.setText("未锁定")
+            self.lockout_status_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            self.lockout_countdown_label.setText("-")
+            return
+
+        try:
+            lockout_time = datetime.fromisoformat(state.lockout_until)
+            now = datetime.now()
+
+            if now < lockout_time:
+                # 仍在锁定中
+                self.lockout_status_label.setText("🔒 已锁定")
+                self.lockout_status_label.setStyleSheet("color: #f44336; font-weight: bold;")
+
+                # 计算剩余时间
+                remaining = lockout_time - now
+                total_seconds = remaining.total_seconds()
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+                seconds = int(total_seconds % 60)
+
+                self.lockout_countdown_label.setText(
+                    f"{hours}小时{minutes}分{seconds}秒\n解锁时间: {lockout_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+            else:
+                # 锁定已过期
+                self.lockout_status_label.setText("未锁定")
+                self.lockout_status_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+                self.lockout_countdown_label.setText("-")
+        except ValueError:
+            self.lockout_status_label.setText("状态异常")
+            self.lockout_status_label.setStyleSheet("color: #FF9800; font-weight: bold;")
+            self.lockout_countdown_label.setText("-")
+
+    def _lock_player(self):
+        """锁定玩家"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        try:
+            hours = float(self.lockout_hours_input.text())
+            if hours <= 0:
+                QMessageBox.warning(self, "警告", "锁定时长必须大于0")
+                return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "请输入有效的小时数")
+            return
+
+        # 确认操作
+        player = self.player_dao.get_player(self.selected_qq_id)
+        reply = QMessageBox.question(
+            self, "确认锁定",
+            f"确定要锁定玩家 {player.nickname}({self.selected_qq_id}) {hours} 小时吗？\n"
+            f"锁定期间该玩家将无法进行游戏。",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            # 设置锁定时间
+            state = self.state_dao.get_state(self.selected_qq_id)
+            lockout_time = datetime.now() + timedelta(hours=hours)
+            state.lockout_until = lockout_time.isoformat()
+            self.state_dao.update_state(state)
+
+            QMessageBox.information(
+                self, "锁定成功",
+                f"玩家 {player.nickname} 已被锁定 {hours} 小时\n"
+                f"解锁时间: {lockout_time.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+
+            # 刷新显示
+            self._show_player_detail(self.selected_qq_id)
+
+    def _unlock_player(self):
+        """解锁玩家"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        state = self.state_dao.get_state(self.selected_qq_id)
+        if not state.lockout_until:
+            QMessageBox.information(self, "提示", "该玩家当前未被锁定")
+            return
+
+        # 确认操作
+        player = self.player_dao.get_player(self.selected_qq_id)
+        reply = QMessageBox.question(
+            self, "确认解锁",
+            f"确定要解锁玩家 {player.nickname}({self.selected_qq_id}) 吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            # 清除锁定
+            state.lockout_until = None
+            self.state_dao.update_state(state)
+
+            QMessageBox.information(self, "解锁成功", f"玩家 {player.nickname} 已被解锁")
+
+            # 刷新显示
+            self._show_player_detail(self.selected_qq_id)
 
 
 def main():

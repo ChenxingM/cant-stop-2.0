@@ -32,22 +32,13 @@ def print_banner():
 
 if __name__ == "__main__":
     print_banner()
-
-    print("📋 功能说明:")
-    print("  • 连接 OneBot v11 WebSocket 服务")
-    print("  • 监听配置的 QQ 群消息")
-    print("  • 处理游戏指令并响应")
-    print()
     print("⚙️  配置文件: config.json")
     print("📂 数据库: data/game.db")
-    print()
-    print("🎮 启动中...\n")
 
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n\n✅ 游戏机器人已停止")
-        print("感谢使用！")
     except Exception as e:
         print(f"\n\n❌ 启动失败: {e}")
         print("\n请检查:")

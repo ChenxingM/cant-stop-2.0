@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.dao import (
-    PlayerDAO, InventoryDAO, AchievementDAO, PositionDAO, ShopDAO
+    PlayerDAO, InventoryDAO, AchievementDAO, PositionDAO, ShopDAO, GameStateDAO
 )
 from database.models import Player
 
@@ -26,6 +26,8 @@ class ContentResult:
     effects: Dict = None  # 效果字典
     requires_input: bool = False  # 是否需要玩家输入选择
     choices: List[str] = None  # 可选项列表
+    image_path: str = None  # 附带的图片路径
+    free_input: bool = False  # 是否自由输入（不显示选项）
 
 
 class ContentHandler:
@@ -38,6 +40,7 @@ class ContentHandler:
         self.position_dao = position_dao
         self.shop_dao = shop_dao
         self.conn = conn
+        self.state_dao = GameStateDAO(conn)
 
     # ==================== 内容触发主入口 ====================
 
@@ -127,7 +130,11 @@ class ContentHandler:
             # 解锁道具到商店
             self.shop_dao.unlock_item(item_id)
 
-            message = f"🎁 获得道具：{item_name}\n该道具已解锁到商店，其他玩家可购买"
+            # 构建消息，包含道具描述
+            message = f"🎁 获得道具：{item_name}"
+            if shop_item and shop_item.description:
+                message += f"\n📝 效果：{shop_item.description}"
+            message += "\n该道具已解锁到商店，其他玩家可购买"
 
             # 记录隐藏成就计数
             self._increment_achievement_counter(qq_id, 'items_collected')
@@ -143,6 +150,32 @@ class ContentHandler:
     def _handle_trap(self, qq_id: str, trap_id: int, trap_name: str, is_first: bool, column: int = None, position: int = None) -> ContentResult:
         """处理陷阱触发"""
         player = self.player_dao.get_player(qq_id)
+
+        # 检查陷阱免疫状态
+        state = self.state_dao.get_state(qq_id)
+
+        # 检查是否有积分免疫（小女孩娃娃-戳脸蛋）
+        if state.trap_immunity_cost is not None:
+            cost = state.trap_immunity_cost
+            if player.current_score >= cost:
+                # 消耗积分免疫陷阱
+                self.player_dao.add_score(qq_id, -cost)
+                state.trap_immunity_cost = None
+                self.state_dao.update_state(state)
+                return ContentResult(True,
+                    f"🛡️ 小女孩的祝福保护了你！\n"
+                    f"消耗{cost}积分，免疫陷阱「{trap_name}」")
+
+        # 检查是否有绘制免疫（小女孩娃娃-戳手）
+        if state.trap_immunity_draw:
+            state.trap_immunity_draw = False
+            self.state_dao.update_state(state)
+            return ContentResult(True,
+                f"🛡️ 小女孩拉着你的手帮你避开了危险！\n"
+                f"免疫陷阱「{trap_name}」\n"
+                f"请绘制相关内容来感谢小女孩~",
+                requires_input=True,
+                choices=["绘制完成"])
 
         if is_first:
             # 首次触发，执行特殊惩罚
@@ -199,7 +232,10 @@ class ContentHandler:
     def _trap_fireball(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱1: 小小火球术"""
         # 停止一回合，下回合固定出目
-        return "停止一回合，下回合出目将固定为(4,5,5,5,6,6)\n*在完成此惩罚前不得主动结束当前轮次", {
+        return ("火球砸出的坑洞让你无处下脚。\n\n"
+                "停止一回合（消耗一回合积分），并在下回合的掷骰中结果自动变为（4，5，5，5，6，6）\n"
+                "*在完成此惩罚前不得主动结束当前轮次\n\n"
+                "> \"为什么我的火球术不能骰出这种伤害啊？！！\""), {
             'skip_rounds': 1,
             'next_dice_fixed': [4, 5, 5, 5, 6, 6]
         }
@@ -207,60 +243,158 @@ class ContentHandler:
     def _trap_dont_look_back(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱2: "不要回头" """
         # 清空当前列进度
-        return "你看到了它的脸...一切都已经晚了\n当前列进度已清空，回到上一个永久棋子位置", {
+        return ("你感到身后一股寒意，当你战战兢兢地转过身试图搞清楚状况时，你发现在看到它脸的那一刻一切都已经晚了……\n\n"
+                "清空当前列进度回到上一个永久棋子位置或初始位置\n\n"
+                "> \"…话说回来，我有一计。\""), {
             'clear_current_column': True,
             'column': column  # 包含列信息以便game_engine处理
         }
 
     def _trap_wedding_ring(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱3: 婚戒...？"""
-        # 检查是否有契约
-        # TODO: 实现契约系统后完善
-        if not player.faction:
-            return "强制暂停该轮次，请完成陷阱相关绘制", {
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+
+        # 检查是否有契约对象
+        partner_qq = contract_dao.get_contract_partner(qq_id)
+
+        if not partner_qq:
+            return ("💍 象征契约精神的戒指。在你触碰它时，你突然被困在原地无法动弹。\n\n"
+                    "【无契约者】强制暂停该轮次直到你完成此陷阱相关绘制（不计算积分）\n\n"
+                    "> \"我产品金婚～\""), {
                 'force_end_round': True,
                 'requires_drawing': True
             }
         else:
-            return "契约的力量守护了你\n你与你的契约者均可获得一次免费回合", {
-                'free_round': True
+            # 获取契约对象信息
+            partner = self.player_dao.get_player(partner_qq)
+            partner_name = partner.nickname if partner else partner_qq
+
+            return (f"💍 象征契约精神的戒指。在你触碰它时，你突然被困在原地无法动弹。\n\n"
+                    f"💕【有契约者】不受陷阱负面影响，你与你的契约者 {partner_name} 均可获得一次免费的回合。\n"
+                    f"(请手动给契约对象添加免费回合)\n\n"
+                    f"> \"我产品金婚～\""), {
+                'free_round': True,
+                'contract_partner': partner_qq  # 返回契约对象QQ，方便后续处理
             }
 
     def _trap_white_hook(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱4: 白色天○钩"""
-        return "巨大的钩子将你拉起并向后移动\n当前列进度回退两格", {
+        return ("（远距离出现）随着震动，一个白色的大钢架拔地而起，上面的钩子将你整个拉起，并开始向后移动…\n\n"
+                "你在该列当前的进度将无视永久棋子回退两格（若退回到永久棋子前的位置，则当前坐标变为永久棋子新位置）\n\n"
+                "> \"怎么还有这种东西啊？！真没人管管吗？！\""), {
             'retreat': 2,
             'column': column
         }
 
     def _trap_closed_door(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
-        """陷阱5: 紧闭的大门"""
-        return "门不能从这一侧打开\n请移动到相邻列", {
-            'move_to_adjacent': True
+        """陷阱5: 紧闭的大门
+
+        效果：立即将当前临时标记移动到旁边两列的任意一列的进度上（即清空本轮在该列的进度）。
+        如果当前轮次相邻列均已放置临时标记或登顶，则直接清空本列本轮次进度并在该轮次禁用此临时标记。
+        """
+        from database.dao import PositionDAO
+        position_dao = PositionDAO(self.conn)
+
+        # 获取当前临时标记
+        temp_positions = position_dao.get_positions(qq_id, 'temp')
+        permanent_positions = position_dao.get_positions(qq_id, 'permanent')
+
+        # 计算相邻列
+        left_column = column - 1 if column > 3 else None
+        right_column = column + 1 if column < 18 else None
+
+        # 检查相邻列是否可用（没有临时标记且未登顶）
+        state = self.state_dao.get_state(qq_id)
+        available_columns = []
+
+        if left_column:
+            has_temp = any(p.column_number == left_column for p in temp_positions)
+            is_topped = left_column in state.topped_columns
+            if not has_temp and not is_topped:
+                available_columns.append(left_column)
+
+        if right_column:
+            has_temp = any(p.column_number == right_column for p in temp_positions)
+            is_topped = right_column in state.topped_columns
+            if not has_temp and not is_topped:
+                available_columns.append(right_column)
+
+        if not available_columns:
+            # 相邻列均不可用，清空本列进度并禁用临时标记
+            return ("\"门不能从这一侧打开\"\n"
+                    "面对这个突然竖在面前的大门你有些摸不着头脑。\n\n"
+                    "相邻列均已放置临时标记或登顶，直接清空本列本轮次进度并在该轮次禁用此临时标记\n\n"
+                    "> \"你没有资格啊\""), {
+                'clear_current_column': True,
+                'column': column,
+                'disable_column_this_round': column
+            }
+
+        # 有可用的相邻列，需要玩家选择
+        choices = [f"移动到列{col}" for col in available_columns]
+        return (f"\"门不能从这一侧打开\"\n"
+                f"面对这个突然竖在面前的大门你有些摸不着头脑。\n\n"
+                f"立即将当前临时标记移动到旁边两列的任意一列的进度上（即清空本轮在该列的进度）\n"
+                f"请选择移动到相邻列：{', '.join(map(str, available_columns))}\n\n"
+                f"> \"你没有资格啊\""), {
+            'requires_trap_choice': True,
+            'trap_type': 'closed_door',
+            'choices': choices,
+            'available_columns': available_columns,
+            'source_column': column
         }
 
     def _trap_odd_even(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱6: 奇变偶不变"""
-        return "奇变偶不变的神秘力量...\n下回合投掷结果将触发特殊检定", {
+        return ("\"这是什么神秘的暗号吗？\"\n\n"
+                "【下回合投掷结果检定】\n"
+                "• 奇数大于3个：额外获得一个d6骰可以随意加到你得到的两个加值的任意一个中\n"
+                "• 奇数≤3个：本回合作废（如果该回合触发［失败被动停止］，则惩罚改为下轮次停止一回合）"), {
             'odd_even_check': True
         }
 
     def _trap_thunder_king(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱7: 雷电法王"""
-        return "强劲的电流从脚底直达头顶\n下回合需要通过数学检定", {
+        return ("一阵强劲的电流从脚底直达你的头顶\n\n"
+                "【下回合投掷结果检定】\n"
+                "• 33加值可以得到的数字数量<8种：本回合作废\n"
+                "• 33加值可以得到的数字数量≥8种：通过检定\n\n"
+                "> \"学不学？\""), {
             'math_check': True
         }
 
     def _trap_duel(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
-        """陷阱8: 中门对狙"""
-        return "有东西挡住了你的去路！\n请选择一位玩家对决(.r1d6比大小)", {
-            'requires_duel': True
+        """陷阱8: 中门对狙
+
+        效果：与神秘对手进行d6对决
+        - 点数大：+5积分
+        - 点数小：停止一回合
+        - 点数相同：无事发生
+        """
+        # 获取所有其他玩家（用于多人游戏）
+        # 由于当前是单人游戏模式，改为与"神秘对手"对决
+        return ("有什么东西挡住了你的去路？哦！是另一个玩家！快快清除阻碍吧～\n\n"
+                "任选一位玩家对决，rd6比大小\n"
+                "• 点数大：+5积分\n"
+                "• 点数小：停止一回合（消耗一回合积分）\n"
+                "• 点数相同：无事发生\n\n"
+                "准备好对决了吗？"), {
+            'requires_trap_choice': True,
+            'trap_type': 'duel',
+            'choices': ['开始对决'],
+            'column': column
         }
 
     def _trap_portal(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱9: 传送门"""
         target_column = random.randint(3, 18)
-        return f"你被传送到了随机列...\n传送目标：第{target_column}列", {
+        return (f"你捡到一把造型奇异的枪，这是什么？你尝试了一下，随后打开了一道传送门。\n"
+                f"给我干哪儿来了？这还是国内吗？\n\n"
+                f"你当前临时标记被传送到地图上的随机一列（rd16）\n"
+                f"传送目标：第{target_column}列\n"
+                f"• 如该列无永久棋子或已有临时标记，则本轮次作废\n"
+                f"• 如该列有永久棋子且无临时标记，则将临时标记放置在永久棋子向上一格位置"), {
             'teleport_to': target_column,
             'column': column
         }
@@ -270,26 +404,34 @@ class ContentHandler:
         dice_roll = random.randint(1, 20)
         if dice_roll > 18:
             self.inventory_dao.add_item(qq_id, 9999, "新鲜三文鱼", "hidden_item")
-            return "灵巧地规避掉了，获得新鲜三文鱼一条！", {}
+            return (f"\"考验技术的时刻到了\"地上突然冒出一排排尖刺…\n\n"
+                    f"投掷d20={dice_roll}>18：灵巧地规避掉了，获得新鲜三文鱼一条！"), {}
         else:
             self.player_dao.add_score(qq_id, -20)
-            return "被扎到了，积分-20", {}
+            return (f"\"考验技术的时刻到了\"地上突然冒出一排排尖刺…\n\n"
+                    f"投掷d20={dice_roll}≤18：被扎到，丢失20积分"), {}
 
     def _trap_hesitate(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱11: 犹豫就会败北"""
-        return "你的骰子自己丢了出去...\n强制再进行两回合后才能结束该轮次", {
+        return ("就在你思考下一步如何决定的时候，你的骰子已经自己丢出去了…\n\n"
+                "强制再进行两回合后才能结束该轮次"), {
             'force_rounds': 2
         }
 
     def _trap_octopus(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱12: 七色章鱼"""
-        return "七色章鱼把你丢了出去\n所有列的当前进度回退一格", {
+        return ("一只闪着七色光芒的章鱼拦住了你的去路。\n"
+                "萌萌的一小只看起来很无害，下一秒却卷起你把你丢了出去。\n\n"
+                "你该轮次所有列的当前的进度回退一格\n\n"
+                "> \"你，审核不通过。\""), {
             'retreat_all': 1
         }
 
     def _trap_hollow(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱13: 中空格子"""
-        return "一脚踩空快速下落...\n暂停2回合", {
+        return ("脚下的格子竟然是中空的？！！\n"
+                "你一脚踩空快速下落，想要抓住边缘爬上来却始终无法成功。\n\n"
+                "暂停2回合（消耗2回合积分）"), {
             'skip_rounds': 2
         }
 
@@ -297,39 +439,68 @@ class ContentHandler:
         """陷阱14: OAS阿卡利亚"""
         loss = max(1, player.current_score // 4)
         self.player_dao.add_score(qq_id, -loss)
-        return f"你的道心破碎了...\n积分减少1/4 (-{loss})", {}
+        return (f"你越玩越觉得这场真人游戏出现了太多奇怪的地方：不符合常理的装置、奇怪的音响、天气突然变化…\n"
+                f"当你停下来观察这一切的时候，你隔着一个个玻璃屏仿佛看到了若隐若现的，成百上千个摄像头正对着你…\n"
+                f"你忍不住再次思考这一切，道心破碎。\n\n"
+                f"积分减1/4 (-{loss})"), {}
 
     def _trap_witch_house(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱15: 魔女的小屋
 
-        注意：这个陷阱需要玩家选择，应该作为遭遇处理，而不是普通陷阱
+        选择与效果：
+        - 帮忙：当前纵列的临时标记被清除
+        - 离开：下次移动标记时必须移动该纵列的临时标记，否则清除当前纵列的临时标记
         """
-        return "你能来帮帮忙吗？\n请选择：帮忙 或 离开", {
-            'requires_choice': True,
-            'choices': ['帮忙', '离开'],
+        return ("\"哎呀...好忙，好忙啊...要是能有人来搭把手就好了...\"\n"
+                "厨房中悬浮的厨刀不断处理着各种食材，就像是有隐形的人在操控着一样。\n"
+                "透明的厨师似乎察觉到了你的靠近。\n"
+                "\"哎呀，有人来了...你能来帮帮忙吗？\"\n\n"
+                "【选择】\n"
+                "• 当然啦，凑上前帮忙 → 当前纵列的临时标记被清除\n"
+                "• 拒绝，沉默地离开 → 下次移动标记时，必须移动该纵列的临时标记，否则清除当前纵列的临时标记"), {
+            'requires_trap_choice': True,
+            'trap_type': 'witch_house',
+            'choices': ['当然啦，凑上前帮忙', '拒绝，沉默地离开'],
             'column': column
         }
 
     def _trap_witch_disturb(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱16: 你惊扰了witch"""
+        base_msg = ("门后的漆黑的房间，你只听见远处有女人啜泣的声音...\n"
+                    "你用手电筒照向那个方向，试图寻找声音的来源，但下一刻，锐利的尖叫声响起！\n"
+                    "长着利爪的女性模样的怪物朝着你扑来，速度之迅速让你难以反应，你被击倒在地——\n\n")
+
         # ae阵营自动成功
         if player.faction == "Aeonreth":
-            return "你迅速做出了反击，击退了那怪物，但你仍然受了些伤，看来需要休息一下了\n强制结束本轮次（ae自动成功）", {
+            return (base_msg +
+                    "【ae自动成功】你迅速做出了反击，击退了那怪物，但你仍然受了些伤，看来需要休息一下了\n"
+                    "强制结束本轮次"), {
                 'force_end_round': True
             }
 
         # 其他玩家投骰检定
         dice_roll = random.randint(1, 20)
         if dice_roll >= 10:
-            return f"门后的漆黑的房间，长着利爪的女性模样的怪物朝着你扑来！\n投掷d20={dice_roll}≥10：你迅速做出了反击，击退了那怪物，但你仍然受了些伤，看来需要休息一下了\n强制结束本轮次", {
+            return (base_msg +
+                    f"投掷d20={dice_roll}≥10：你迅速做出了反击，击退了那怪物，但你仍然受了些伤，看来需要休息一下了\n"
+                    f"强制结束本轮次"), {
                 'force_end_round': True
             }
         else:
             self.player_dao.add_score(qq_id, -20)
-            return f"门后的漆黑的房间，长着利爪的女性模样的怪物朝着你扑来！\n投掷d20={dice_roll}<10：你被攻击后陷入了昏迷...当你再次清醒过来时，发现身上的糖果都不见了...\n积分-20", {}
+            return (base_msg +
+                    f"投掷d20={dice_roll}<10：你被攻击后陷入了昏迷...当你再次清醒过来时，发现身上的糖果都不见了...\n"
+                    f"积分-20"), {}
 
     def _trap_tick_tock(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱17: 滴答滴答"""
+        base_msg = ("……这是哪里，密室逃亡吗？\n"
+                    "你掉入了一个古怪的寂静小镇，褪色一般古老的欧式镇子里仅你一人。\n"
+                    "在作为背景音不断流逝的滴答声中你在镇子里来回奔走，耗费了不知道多少的时间后，终于打开了通往大钟的门。\n"
+                    "当你爬上了钟楼顶，你只见到了一个发光的瓶子，正细数着你的时间。\n"
+                    "【你的时间我就收下了（wink）】\n"
+                    "你只觉得口袋似乎一轻，有什么东西伴随着你流逝的时间一起消失了。\n\n")
+
         # 随机失去一样道具
         inventory = self.inventory_dao.get_inventory(qq_id)
         regular_items = [item for item in inventory if item.item_type == 'item']
@@ -337,29 +508,50 @@ class ContentHandler:
         if regular_items:
             lost_item = random.choice(regular_items)
             self.inventory_dao.remove_item(qq_id, lost_item.item_id, 'item')
-            return f"你的时间我就收下了\n失去道具：{lost_item.item_name}", {}
+            return base_msg + f"随机失去一样现有道具：{lost_item.item_name}", {}
         else:
             self.player_dao.add_score(qq_id, -100)
-            return "你的时间我就收下了\n未持有道具，扣除100积分", {}
+            return base_msg + "未持有道具，积分-100", {}
 
     def _trap_no_entry(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱18: 非请勿入"""
-        return "小屋活过来了，你被困住了\n5d4+4个小时不能进行打卡和游玩", {
-            'lockout_hours': random.randint(5, 24) + 4
+        lockout_hours = random.randint(5, 20) + 4  # 5d4+4
+        msg = ("【非请勿入】\n\n"
+               "在你踏入小屋的一瞬间，小屋就活过来了……\n"
+               "花瓶冒出头发，壁画兀自哭泣，衣帽架搔首弄姿，菜刀咯咯作响……哪里是出去的路？！\n"
+               "门毫无意外地锁着，你不得不在小屋里躲藏逃窜直到它们玩腻。\n\n"
+               f"⚠️ 效果：（现实时间）{lockout_hours}个小时不能进行打卡和游玩")
+        return msg, {
+            'lockout_hours': lockout_hours
         }
 
     def _trap_no_air_force(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱19: 没有空军"""
         self.player_dao.add_score(qq_id, -20)
         # 随机回退一个临时棋子
-        return "漆黑的影子...你陷入不定性疯狂\n失去控制两回合，积分-20，随机回退一格临时棋子", {
+        msg = ("【没有空军】\n\n"
+               "当你回神时已经和一位胡子花白的老人对着膝盖坐在一艘渔船上，他胡子底下掩映的笑意来自于手里紧绷的鱼线。\n"
+               "\"看她多有劲！\"他絮絮叨叨着，而你无法阻止他收起那枚使你的潜意识警铃大作的鱼钩。\n"
+               "漆黑的影子迅速抬升在小船底下蔓延开来，与头顶漆黑的天空互相倾轧，你们的小船在其中大小只不过一枚粟米……\n"
+               "终于，祂露出了海面。\n\n"
+               "你的理智流失，陷入不定性疯狂。\n\n"
+               "⚠️ 效果：失去控制两回合（消耗20积分）并随机倒退一格临时棋子")
+        return msg, {
             'skip_rounds': 2,
             'random_retreat': 1
         }
 
     def _trap_lucky_day(self, qq_id: str, player: Player, column: int = None, position: int = None) -> Tuple[str, Dict]:
         """陷阱20: LUCKY DAY！"""
-        return "赌命的时候到了...\n下回合只投掷四个骰子，两两分组", {
+        msg = ("【LUCKY DAY！】\n\n"
+               "貌似并没有人询问你的意愿，但在你踏入这个黑漆漆的屋子那一瞬间，游戏就将你加入了玩家的行列。\n"
+               "昏暗光源下长桌对面的庄家没有多解释什么，将桌上展示的几枚双色弹填进了猎枪弹槽。\n"
+               "枪口抬起，接下来，就是赌命的时候了。\n\n"
+               "……剧痛像钩子一样勾住你的脑仁，将你从黑漆漆的梦境里拉出。\n"
+               "有什么代替你的脑浆泼洒在了那间屋子里……你已经难以记起具体的过程，但是显然从一开始这个游戏就没有公平可言。\n\n"
+               "⚠️ 效果：下回合只投掷四个骰子，并两两分组\n"
+               "*在完成此惩罚前不得主动结束当前轮次")
+        return msg, {
             'next_dice_count': 4,
             'next_dice_groups': [2, 2]
         }
@@ -434,7 +626,11 @@ class ContentHandler:
 
         handler = encounter_effects.get(encounter_id)
         if handler:
-            return handler(qq_id, encounter_name, choice)
+            result = handler(qq_id, encounter_name, choice)
+            # 防止处理器返回None
+            if result is None:
+                return ContentResult(False, f"❌ 处理遭遇时出错：无效的选择 '{choice}'")
+            return result
 
         # 默认遭遇（可完成打卡获得5积分）
         return ContentResult(True,
@@ -551,16 +747,19 @@ class ContentHandler:
         if choice is None:
             return ContentResult(True,
                                f"📖 {encounter_name}\n\n"
-                               f"红框里的单词是？",
+                               f"红框里的单词是？\n\n"
+                               f"💡 使用「选择：你的答案」来回答",
                                requires_input=True,
-                               choices=["OAS", "其他回答"])
+                               free_input=True,
+                               image_path="data/images/inspection.jpg")
 
-        if choice == "OAS":
+        # 检查答案（忽略大小写）
+        if choice.upper() == "OAS":
             self.player_dao.add_score(qq_id, 5)
             return ContentResult(True, "太棒了！我都想聘请你当员工了！你的积分+5。")
         else:
             self.player_dao.add_score(qq_id, -5)
-            return ContentResult(True, "连协会的缩写都记不住吗？！好受打击…嘤嘤！QAQ 你被扣除5积分。")
+            return ContentResult(True, f"连协会的缩写都记不住吗？！好受打击…嘤嘤！QAQ 你被扣除5积分。")
 
     def _encounter_congrats(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇20: 恭喜你"""
@@ -652,12 +851,12 @@ class ContentHandler:
             return ContentResult(True,
                                "你抵挡不住螂的力量，扔了骰子就跑，下次投掷固定数值(3,3,3,4,4,4)",
                                {'next_dice_fixed': [3, 3, 3, 4, 4, 4]})
-        elif choice == "喷杀虫剂":
+        elif choice.startswith("喷杀虫剂"):
             if self.player_dao.consume_score(qq_id, 5):
                 return ContentResult(True, "\"大螂，该吃药了\"——显然这点剂量难以脚刹大螂，不过它还是飞走了，你逃过一劫。")
             else:
                 return ContentResult(False, "积分不足，无法购买杀虫剂")
-        elif choice == "化兽为友":
+        elif choice.startswith("化兽为友"):
             dice_roll = random.randint(1, 6)
             if dice_roll <= 3:
                 return ContentResult(True,
@@ -667,7 +866,7 @@ class ContentHandler:
                 return ContentResult(True,
                                    f"[暗骰一个d6骰] 结果={dice_roll}>3：蟑螂觉得你非常亲切，带着你飞快前进。当前临时标记额外向前移动一格。",
                                    {'move_temp_forward': 1})
-        elif choice == "蟑螂驾驭":
+        elif choice.startswith("蟑螂驾驭"):
             dice_roll = random.randint(1, 6)
             if dice_roll <= 3:
                 return ContentResult(True,
@@ -677,6 +876,9 @@ class ContentHandler:
                 return ContentResult(True,
                                    f"[暗骰一个d6骰] 结果={dice_roll}>3：螂并不想听你的，你抵挡不住螂的力量，扔了骰子就跑，下次投掷固定数值(3,3,3,4,4,4)",
                                    {'next_dice_fixed': [3, 3, 3, 4, 4, 4]})
+
+        # 未匹配到任何选择
+        return ContentResult(False, f"❌ 无效的选择：{choice}")
 
     def _encounter_money_rain(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇11: 大撒币!"""
@@ -854,9 +1056,20 @@ class ContentHandler:
                 self.player_dao.add_score(qq_id, 5)
                 return ContentResult(True, "• (ae限定)你感觉你的能力在恢复…不，是你的力量在上升……你的积分+5")
             elif player.faction == "收养人":
-                # TODO: 检查是否有契约ae
-                self.player_dao.add_score(qq_id, 5)
-                return ContentResult(True, "• (小女孩限定)葡萄叶生长遮蔽了你的视线，是ae的力量吗？你不由得产生这种想法…如果你有契约ae，你的积分+5；如果没有，无事发生。")
+                # 检查是否有契约ae
+                from database.dao import ContractDAO
+                contract_dao = ContractDAO(self.conn)
+                partner_qq = contract_dao.get_contract_partner(qq_id)
+
+                if partner_qq:
+                    partner = self.player_dao.get_player(partner_qq)
+                    if partner and partner.faction == "Aeonreth":
+                        self.player_dao.add_score(qq_id, 5)
+                        return ContentResult(True, f"• (小女孩限定)葡萄叶生长遮蔽了你的视线，是ae的力量吗？你不由得产生这种想法…\n💕 你的契约对象 {partner.nickname} 是Aeonreth阵营，你的积分+5")
+                    else:
+                        return ContentResult(True, f"• (小女孩限定)葡萄叶生长遮蔽了你的视线，是ae的力量吗？你不由得产生这种想法…\n💔 你的契约对象不是Aeonreth阵营，无事发生")
+                else:
+                    return ContentResult(True, "• (小女孩限定)葡萄叶生长遮蔽了你的视线，是ae的力量吗？你不由得产生这种想法…\n💔 你没有契约对象，无事发生")
             else:
                 return ContentResult(True, "无事发生")
         elif choice == "种下蔷薇":
@@ -1040,16 +1253,39 @@ class ContentHandler:
 
     def _encounter_coop_game(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇31: 双人成列"""
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+
+        # 检查是否有契约对象
+        partner_qq = contract_dao.get_contract_partner(qq_id)
+
         if choice is None:
-            return ContentResult(True,
-                               f"📖 {encounter_name}\n\n"
-                               f"承载着两个手柄的展示台缓缓升起，在你面前，全息影像生成了一个双人小游戏界面…",
-                               requires_input=True,
-                               choices=["和契约对象一起玩", "可我没有契约对象"])
+            if partner_qq:
+                partner = self.player_dao.get_player(partner_qq)
+                partner_name = partner.nickname if partner else partner_qq
+                return ContentResult(True,
+                                   f"📖 {encounter_name}\n\n"
+                                   f"承载着两个手柄的展示台缓缓升起，在你面前，全息影像生成了一个双人小游戏界面…\n"
+                                   f"💕 你的契约对象：{partner_name}",
+                                   requires_input=True,
+                                   choices=["和契约对象一起玩", "可我没有契约对象"])
+            else:
+                return ContentResult(True,
+                                   f"📖 {encounter_name}\n\n"
+                                   f"承载着两个手柄的展示台缓缓升起，在你面前，全息影像生成了一个双人小游戏界面…\n"
+                                   f"💔 你当前没有契约对象",
+                                   requires_input=True,
+                                   choices=["可我没有契约对象"])
 
         if choice == "和契约对象一起玩":
+            if not partner_qq:
+                return ContentResult(True,
+                                   "❌ 你没有契约对象，无法选择此选项！\n一个人怎么就不能用两个手柄！你还是上了。投3个d6骰，如果3次全部出目一样，则当前临时标记可以向前移动一格，且你本轮次主动结束不用打卡即可开启下一轮次。获得成就：单人硬行",
+                                   {'achievement_check': '单人硬行'})
+            partner = self.player_dao.get_player(partner_qq)
+            partner_name = partner.nickname if partner else partner_qq
             return ContentResult(True,
-                               "和你的契约对象分别投一个d6骰，如果你们出目一样，则你们靠着出色的默契通关小游戏，各获得一次免费回合。")
+                               f"🎮 和契约对象 {partner_name} 一起玩！\n你们分别投一个d6骰，如果出目一样，则你们靠着出色的默契通关小游戏，各获得一次免费回合。\n(请双方分别投骰并报告结果)")
         elif choice == "可我没有契约对象":
             return ContentResult(True,
                                "一个人怎么就不能用两个手柄！你还是上了。投3个d6骰，如果3次全部出目一样，则当前临时标记可以向前移动一格，且你本轮次主动结束不用打卡即可开启下一轮次。获得成就：单人硬行",
@@ -1327,22 +1563,53 @@ class ContentHandler:
 
     def _encounter_cooking(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇44: 解约厨房"""
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+
+        # 检查是否有契约对象
+        partner_qq = contract_dao.get_contract_partner(qq_id)
+
         if choice is None:
-            return ContentResult(True,
-                               f"📖 {encounter_name}\n\n"
-                               f"\"我做饭？真的假的？\"你突然接到任务，需要和你的契约对象配合完成几份食物的准备。",
-                               requires_input=True,
-                               choices=["要上了", "不做", "可我没有契约对象"])
+            if partner_qq:
+                partner = self.player_dao.get_player(partner_qq)
+                partner_name = partner.nickname if partner else partner_qq
+                return ContentResult(True,
+                                   f"📖 {encounter_name}\n\n"
+                                   f"\"我做饭？真的假的？\"你突然接到任务，需要和你的契约对象配合完成几份食物的准备。\n"
+                                   f"💕 你的契约对象：{partner_name}",
+                                   requires_input=True,
+                                   choices=["要上了", "不做", "可我没有契约对象"])
+            else:
+                return ContentResult(True,
+                                   f"📖 {encounter_name}\n\n"
+                                   f"\"我做饭？真的假的？\"你突然接到任务，需要和你的契约对象配合完成几份食物的准备。\n"
+                                   f"💔 你当前没有契约对象",
+                                   requires_input=True,
+                                   choices=["不做", "可我没有契约对象"])
 
         if choice == "要上了":
+            if not partner_qq:
+                # 没有契约对象却选了要上，按单人模式处理
+                dice_roll = random.randint(1, 6)
+                if dice_roll == 6:
+                    self.player_dao.add_score(qq_id, 10)
+                    return ContentResult(True, f"❌ 你没有契约对象！\nd6={dice_roll}=6 没有契约对象的你一个人干两份活儿…你成功完成任务,积分+10")
+                elif dice_roll >= 3:
+                    return ContentResult(True, f"❌ 你没有契约对象！\nd6={dice_roll} 你果然一个人还是忙不过来,任务失败。无事发生")
+                else:
+                    self.player_dao.add_score(qq_id, -5)
+                    return ContentResult(True, f"❌ 你没有契约对象！\nd6={dice_roll}<3 你不仅没有完成任务,还惹怒了顾客,你的积分-5")
+
+            partner = self.player_dao.get_player(partner_qq)
+            partner_name = partner.nickname if partner else partner_qq
             dice_roll = random.randint(1, 6)
             if dice_roll >= 4:
                 self.player_dao.add_score(qq_id, 5)
                 return ContentResult(True,
-                                   f"d6={dice_roll}≥4 你叫上契约对象就上了。你们配合完美,简直是最合适的搭档!你和你的契约对象各自积分+5\n(需要手动给契约对象加分)")
+                                   f"d6={dice_roll}≥4 你叫上契约对象 {partner_name} 就上了。你们配合完美,简直是最合适的搭档!\n你和契约对象各自积分+5\n(请手动给契约对象 {partner_name} 加5分)")
             else:
                 return ContentResult(True,
-                                   f"d6={dice_roll}<4 你们手忙脚乱失败了,虽然没有收到什么责罚,但你忍不住开始考虑和你契约对象之间的默契……无事发生")
+                                   f"d6={dice_roll}<4 你和 {partner_name} 手忙脚乱失败了,虽然没有收到什么责罚,但你忍不住开始考虑和你契约对象之间的默契……无事发生")
         elif choice == "不做":
             return ContentResult(True,
                                "顾客气得跑来骂街,影响了你的游戏进程。\n你暂停一回合(消耗一回合积分)",
@@ -1439,7 +1706,9 @@ class ContentHandler:
         """遭遇49: 一千零一"""
         if choice is None:
             return ContentResult(True,
-                               f"📖 {encounter_name}\n她邀请你停下来聆听最后一个故事",
+                               f"📖 {encounter_name}\n\n"
+                               f"你看见了一位头纱如夜色般的女性，她捧着一颗闭着眼睛的头颅端坐在柔软的坐垫里。\n"
+                               f"见你来了，她邀请你停下来聆听最后一个故事。",
                                requires_input=True,
                                choices=["坐下", "对不起,没有时间……", "我有一个点子!🤓☝️"])
 
@@ -1459,9 +1728,11 @@ class ContentHandler:
         """遭遇50: 身影"""
         # 观察类遭遇,不需要choice处理
         return ContentResult(True,
-                           f"📖 {encounter_name}\n层叠的几何建筑展开,如同可拆解的立体纸盒,顺着视线方向层层铺展。\n"
-                           f"你在其间穿梭,瓷砖铺就的路径随视角转动不断重构——刚踏上的阶梯转头变成垂直的平面,抬手即可触碰的天花板俯身却踩在了脚下,闭合的大门侧身便出现了宽敞的道路…\n"
-                           f"当你终于驻足注意到某座高悬的尖塔,试图去触摸那或许也并不真实的墙面时,竟从塔身的纹路里,瞥见无数个自己的残影,那些残影的身后也隐约透露出你所经过的建筑碎片…")
+                           f"📖 {encounter_name}\n\n"
+                           f"层叠的几何建筑展开，如同可拆解的立体纸盒，顺着视线方向层层铺展。\n"
+                           f"你在其间穿梭，瓷砖铺就的路径随视角转动不断重构——刚踏上的阶梯转头变成垂直的平面，抬手即可触碰的天花板俯身却踩在了脚下，闭合的大门侧身便出现了宽敞的道路…\n"
+                           f"当你终于驻足注意到某座高悬的尖塔，试图去触摸那或许也并不真实的墙面时，竟从塔身的纹路里，瞥见无数个自己的残影，那些残影的身后也隐约透露出你所经过的建筑碎片…\n\n"
+                           f"💡 观察类遭遇，无具体选项")
 
 
     def _encounter_wild_west(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
@@ -1473,7 +1744,10 @@ class ContentHandler:
                 choices.insert(1, "比试酒量(小女孩禁选)")
 
             return ContentResult(True,
-                               f"📖 {encounter_name}\n西部酒馆!\"来吧?小家伙,来比试比试。\"",
+                               f"📖 {encounter_name}\n\n"
+                               f"你发现自己正坐在一个喧闹的老酒馆里，吱呀作响的木门外滚过几株风滚草，你低头看了看自己的身体，围巾、皮质夹克和马丁靴，腰间的枪带里还有一把左轮手枪。\n"
+                               f"一个穿着背带牛仔裤的光头络腮胡大块头踱步到你面前，露出一个挑衅的笑容。\n"
+                               f"\"呦，新来的。在瓦伦汀的酒馆，新来的都得证明自己有让大伙尊重的实力，来吧？小家伙，来比试比试。\"",
                                requires_input=True,
                                choices=choices)
 
@@ -1495,9 +1769,11 @@ class ContentHandler:
         """遭遇52: 循环往复"""
         # 谜题类遭遇,不需要choice处理
         return ContentResult(True,
-                           f"📖 {encounter_name}\n面前是标着发光exit的大门,难道说终于走到头了?!你拧下把手,推开,踏入……?\n"
-                           f"不对,这里是哪里?门后一扇一模一样的门在不远处闪着光,与此同时,你拽着的门消失了,只剩下一个把手在你的手上。\n"
-                           f"你莫名地回头,在身后不远处,看到了一个熟悉的后脑勺,ta的手上也空捏着个把手。不对……不对?!!")
+                           f"📖 {encounter_name}\n\n"
+                           f"面前是标着发光exit的大门，难道说终于走到头了?!你拧下把手，推开，踏入……?\n"
+                           f"不对，这里是哪里？门后一扇一模一样的门在不远处闪着光，与此同时，你拽着的门消失了，只剩下一个把手在你的手上。\n"
+                           f"你莫名地回头，在身后不远处，看到了一个熟悉的后脑勺，ta的手上也空捏着个把手。不对……不对?!!\n\n"
+                           f"💡 谜题类遭遇，描述性内容")
 
     def _encounter_corridor(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇53: 回廊"""
@@ -1510,7 +1786,10 @@ class ContentHandler:
                 choices.append("旋转手电筒(需要在[法庭]遭遇获得[手电筒])")
 
             return ContentResult(True,
-                               f"📖 {encounter_name}\n潮湿的木板路,黑影们背对着你一动不动...",
+                               f"📖 {encounter_name}\n\n"
+                               f"周围在你眼前黑了下去。你摸索着向前走，潮湿的木板路在脚下发出吱呀异响。\n"
+                               f"不知走了多久，前方隐约透出一丝微弱的昏黄，随着脚步靠近，光线逐渐清晰，灯泡在头顶摇晃，投下扭曲的长影。\n"
+                               f"前方的薄雾里，隐约浮现一排排高瘦的黑影，背对着你一动不动，衣角在阴冷的风里轻轻飘动…",
                                requires_input=True,
                                choices=choices)
 
@@ -1535,7 +1814,10 @@ class ContentHandler:
         """遭遇54: 天下无程序员"""
         if choice is None:
             return ContentResult(True,
-                               f"📖 {encounter_name}\n\"打…打打打…劫!\"一个崩溃的程序员冲出来拦住了你",
+                               f"📖 {encounter_name}\n\n"
+                               f"\"打…打打打…劫！\"\n"
+                               f"\"道…道…道具技能陷阱卡，通…通通交给我管辖！\"\n"
+                               f"一个看起来像是崩溃了的程序员的人冲出来拦住了你。",
                                requires_input=True,
                                choices=["溜走", "呼叫主持人", "报告打劫的,没有陷阱卡"])
 
@@ -1561,28 +1843,41 @@ class ContentHandler:
                 choices.insert(0, "蓝玫瑰(ae限定)")
 
             return ContentResult(True,
-                               f"📖 {encounter_name}\n水下的Aeonreth画作...花瓶中有一枝玫瑰",
+                               f"📖 {encounter_name}\n\n"
+                               f"欢迎来到的OAS协会美术馆，非常感谢您今天的到来。请尽情地欣赏奇幻而优美的画作吧！\n"
+                               f"美术馆中央，一副巨大的画作在这里展出，这是这次美术展中最显眼的作品，深蓝到漆黑的画布中鱼群围绕着一条庞大的张开巨口的生物...\n"
+                               f"展品的介绍牌上如是写道：《水下的Aeonreth》-\"为了创作这个不允许人类涉足的世界，我在画布中创造了这个世界。\"\n"
+                               f"画作美轮美奂，又像是有着奇妙的魔力，描绘的场景仿佛可以将你吸入其中......\n"
+                               f"突然，你注意到了这画布下面似乎有蓝色的颜料流了出来，并在墙壁上形成了文字。\n"
+                               f"\"快过来吧。\"\"到下面来吧，告诉你一个秘密的地方。\"\n"
+                               f"一阵眩晕过后，你再次睁开了眼睛，在你面前有一个花瓶，花瓶中有一枝玫瑰。",
                                requires_input=True,
                                choices=choices)
 
-        if choice == "红玫瑰":
+        if choice.startswith("红玫瑰"):
             self.inventory_dao.add_item(qq_id, 9111, "红玫瑰", "hidden_item")
             return ContentResult(True,
                                "那是一枝娇艳的红玫瑰,柔弱的花瓣仿佛会流出鲜血。\n获得隐藏道具:红玫瑰。当你触发失败被动停止时,可以消耗该道具与10积分重新进行一轮投掷")
-        elif choice == "蓝玫瑰":
+        elif choice.startswith("蓝玫瑰"):
             self.inventory_dao.add_item(qq_id, 9112, "蓝玫瑰", "hidden_item")
             return ContentResult(True,
                                "那是一枝坚韧的蓝玫瑰,花瓣泛着微微的光芒。\n获得隐藏道具:蓝玫瑰。当你的收养人触发失败被动停止时,你可以消耗该道具与10积分让其重新进行一轮投掷。如果无收养人则可以对自己使用")
-        elif choice == "黄玫瑰":
+        elif choice.startswith("黄玫瑰"):
             self.inventory_dao.add_item(qq_id, 9113, "黄玫瑰", "hidden_item")
             return ContentResult(True,
                                "那是一枝虚假的黄玫瑰,塑料制成的花瓣永远不会枯萎。\n获得隐藏道具:黄玫瑰。你消耗该道具后,可指定一名玩家在移动临时标记时必须被迫重新进行投掷,且必须采用新一轮投掷的结果")
+
+        # 未匹配到任何选择
+        return ContentResult(False, f"❌ 无效的选择：{choice}")
 
     def _encounter_real_story(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇56: 真实的经历"""
         if choice is None:
             return ContentResult(True,
-                               f"📖 {encounter_name}\n你穿越回了活动开始前,系统崩溃了!",
+                               f"📖 {encounter_name}\n\n"
+                               f"你再次睁开眼睛，发现穿越回了毕业游戏开始的前一天——\n"
+                               f"就在距离活动开始剩余不到4个小时的时候，为游戏专门建立的系统突然崩溃了，技术部的人员不得不开始紧急维修。\n"
+                               f"似乎是遭遇了未知问题...技术部的工程师们焦头烂额，为了活动可以顺利进行，请帮帮忙吧！",
                                requires_input=True,
                                choices=["询问工程师", "调查服务器"])
 
@@ -1601,7 +1896,11 @@ class ContentHandler:
         """遭遇57: 初次见面"""
         if choice is None:
             return ContentResult(True,
-                               f"📖 {encounter_name}\n西西弗斯和他的巨石,你口袋多了一瓶金色酒液",
+                               f"📖 {encounter_name}\n\n"
+                               f"这里的光线并不算很好，石制围栏与周围的石雕带着显而易见的希腊风格，微弱的光源仅靠围栏下诡异的绿色水面与角落里微弱的烛火提供。\n"
+                               f"正因如此，你没注意到在坡道前的那块球形巨石阴影里还站着一个高大的人。\n"
+                               f"他出声时几乎吓得你差点跳起来，但他的语气却意外地友好。他自我介绍为西西弗斯，旁边的则是巨石。\n"
+                               f"……那么，接下来要做什么呢？你下意识地摸了摸口袋，发现不知道什么时候口袋一沉，多了一瓶圆滚滚亮晶晶的金色酒液。",
                                requires_input=True,
                                choices=["来都来了,送西西弗斯", "呃,送巨石?", "我自己喝!"])
 
@@ -1623,23 +1922,31 @@ class ContentHandler:
         """遭遇58: 冥府之路"""
         if choice is None:
             return ContentResult(True,
-                               f"📖 {encounter_name}\n高耸的石制宫殿,一个声音告诉你不要回头,一直往前走",
+                               f"📖 {encounter_name}\n你来到一个石制拱顶的高耸宫殿。\n"
+                               f"似乎并不是常人比例的高大石柱支起沉重的穹顶,石像鬼隐于视线几乎不可触及的高耸浮雕之上,由黑暗庇护着俯视你。\n"
+                               f"这里的地面上分散地燃着火光幽绿的蜡烛,你的到来掀起了一阵微风,拂起地面上不知沉寂多久的浮尘,烛影也随之摇动,将此处染得如影影绰绰的石头森林。\n"
+                               f"你隐约感到有人在身后缀着你的影子,但是每当你想要回头确认,总有一个微弱的声音告诉你不要回头,一直往前走到人间。",
                                requires_input=True,
                                choices=["我听劝,拜拜了您嘞。", "我倒要看看是什么东西!"])
 
         if choice == "我听劝,拜拜了您嘞。":
             self.inventory_dao.add_item(qq_id, 9116, "冥府里拉琴", "hidden_item")
             return ContentResult(True,
-                               "也许你仍对这个声音有疑问,又或许你对这个声音深信不疑,但总之你选择听从建议。你一路快步走到了宫殿的尽头,当你踏入尽头处的光芒中之后,你隐约听到有人轻松的谢意从你耳边飘过。手中一重,出现了一把古朴的里拉琴。\n获得隐藏道具:冥府里拉琴。使用可让契约对象当前的任意临时标记向前一格;如没有契约对象,则可以让自己当前的任意临时标记向前一格")
+                               "也许你仍对这个声音有疑问,又或许你对这个声音深信不疑,但总之你选择听从建议。你一路快步走到了宫殿的尽头,当你踏入尽头处的光芒中之后,你隐约听到有人轻松的谢意从你耳边飘过。手中一重,出现了一把古朴的里拉琴。\n"
+                               "获得隐藏道具:冥府里拉琴。使用可让契约对象当前的任意临时标记向前一格;如没有契约对象,则可以让自己当前的任意临时标记向前一格")
         elif choice == "我倒要看看是什么东西!":
             return ContentResult(True,
                                "你是个有主见的个体!怎么能说不看就不看!你选择了违背那个声音,但当你回头的一瞬间,那个远远缀着你的身影一下变得僵硬,从头到脚,缓慢地泛起白,再崩起了一阵烟尘,最后失去了人形,化作大大小小的块状散落在地。你靠近一看,是盐块。无事发生")
 
     def _encounter_name(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇59: 名字"""
+        # 获取玩家昵称
+        player = self.player_dao.get_player(qq_id)
+        nickname = player.nickname if player else "旅行者"
+
         if choice is None:
             return ContentResult(True,
-                               f"📖 {encounter_name}\n\"(群昵称名字),我叫你一声你敢答应吗?\"",
+                               f"📖 {encounter_name}\n\"{nickname},我叫你一声你敢答应吗?\"",
                                requires_input=True,
                                choices=["不敢不敢", "那我叫你一声你敢答应吗?", "唉多…"])
 
@@ -1660,13 +1967,16 @@ class ContentHandler:
             self.player_dao.add_score(qq_id, 10)
             self.inventory_dao.add_item(qq_id, 9117, "黑金绿葫芦", "hidden_item")
             return ContentResult(True,
-                               "你爽快地点头并回答了他,但是什么都没有发生。对方恼羞成怒,\"怎么回事??!为什么没有反应?!!\"\n\"(群昵称名字)是谁啊?\"你邪魅一笑,原来你根本没有使用本名注册参加游戏。对方被你耍得团团转,你趁他气急败坏顺走了他的宝物和小钱钱。\n你的积分+10\n获得隐藏物品:黑金绿葫芦")
+                               f"你爽快地点头并回答了他,但是什么都没有发生。对方恼羞成怒,\"怎么回事??!为什么没有反应?!!\"\n\"{nickname}是谁啊?\"你邪魅一笑,原来你根本没有使用本名注册参加游戏。对方被你耍得团团转,你趁他气急败坏顺走了他的宝物和小钱钱。\n你的积分+10\n获得隐藏物品:黑金绿葫芦")
 
     def _encounter_fog(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇60: 浓雾之中"""
         if choice is None:
             return ContentResult(True,
-                               f"📖 {encounter_name}\n浓雾弥漫,你撞到了一个人,他示意你放轻声音",
+                               f"📖 {encounter_name}\n\n"
+                               f"起雾了。浓得不正常的大雾带着潮湿冰冷的水汽弥漫在四周，随之而来的是不知从何而来的水声与浅淡的臭气。\n"
+                               f"你盲目地缓步前进探索着这片浓雾希望能找到下一个门，直到你不小心撞到了——一个人？\n"
+                               f"对方虽然被突然冒出来的你吓得快叫出声来，但是还是立刻反应过来捂住了你的嘴，并用手势示意你放轻声音。",
                                requires_input=True,
                                choices=["听你的,VOL--", "老师我看不明白", "我就喜欢反着干,VOL++"])
 
@@ -1731,14 +2041,23 @@ class ContentHandler:
             22: self._use_fire_statue,          # 火人雕像
             23: self._use_ice_statue,           # 冰人雕像
             24: self._use_soul_leaf,            # 灵魂之叶
+            # 隐藏道具
+            9116: self._use_underworld_lyre,    # 冥府里拉琴
         }
 
         handler = item_handlers.get(item_id)
         if handler:
             result = handler(qq_id, **kwargs)
-            # 如果使用成功，从背包移除
+            # 防止处理器返回None
+            if result is None:
+                choice = kwargs.get('choice', '')
+                return ContentResult(False, f"❌ 使用道具时出错：无效的选择 '{choice}'")
+            # 如果使用成功，从背包移除（根据道具类型选择正确的type）
             if result.success and not result.requires_input:
-                self.inventory_dao.remove_item(qq_id, item_id, 'item')
+                if item_id >= 9000:  # 隐藏道具
+                    self.inventory_dao.remove_item(qq_id, item_id, 'hidden_item')
+                else:
+                    self.inventory_dao.remove_item(qq_id, item_id, 'item')
             return result
 
         return ContentResult(False, f"道具 {item_name} 的使用效果尚未实现")
@@ -1746,13 +2065,17 @@ class ContentHandler:
     def _use_reload_save(self, qq_id: str, **kwargs) -> ContentResult:
         """道具1: 败者尘 - 重新投掷"""
         return ContentResult(True,
-                           "使用败者尘！清空本回合点数，准备重新投掷",
+                           "🎮 使用败者○尘！\n"
+                           "是游戏就有读档！\n"
+                           "清空本回合点数，准备重新投掷（.r6d6）",
                            {'clear_round': True, 'allow_reroll': True})
 
     def _use_fly_forward(self, qq_id: str, **kwargs) -> ContentResult:
         """道具2: 放飞小○! - 最远临时标记前进2格"""
         return ContentResult(True,
-                           "放飞小○！你离终点最远的临时标记向前移动两格",
+                           "🎈 使用放飞小○！\n"
+                           "飞起来孩子飞起来～\n"
+                           "你离终点最远的临时标记向前移动两格",
                            {'move_farthest_temp': 2})
 
     def _use_sweet_talk(self, qq_id: str, target_qq: str = None, **kwargs) -> ContentResult:
@@ -1761,59 +2084,77 @@ class ContentHandler:
             return ContentResult(False, "请指定目标玩家QQ号")
 
         return ContentResult(True,
-                           f"使用花言巧语！目标玩家下一轮不能在其当前轮次的列上行进\n目标可投掷d6，出目6可抵消",
+                           f"🗣️ 使用花言巧语！\n"
+                           f"封锁道路的窗子～\n"
+                           f"目标玩家下一轮不能在其当前轮次的列上行进\n"
+                           f"（目标可投掷d6，出目6可抵消该次惩罚）",
                            {'block_target': target_qq})
 
     def _use_hammer_party(self, qq_id: str, column: int = None, position: int = None, **kwargs) -> ContentResult:
-        """道具4: 揍击派对 - 指定位置所有标记倒退1格"""
+        """道具4: 揍击派对 - 指定位置所有玩家的标记倒退1格（包括自己）"""
         if column is None or position is None:
-            return ContentResult(False, "请指定列号和位置 (格式: column, position)")
+            return ContentResult(False, "请指定列号和位置 (格式: 使用道具 揍击派对 列号,位置)")
 
         return ContentResult(True,
-                           f"使用揍击派对！在({column}, {position})召唤疯狂大摆锤",
+                           f"🔨 使用揍击派对！\n"
+                           f"吃我一锤！\n"
+                           f"在坐标({column}, {position})召唤疯狂大摆锤\n"
+                           f"该坐标上所有玩家的临时标记和永久棋子倒退一格",
                            {'hammer_position': (column, position)})
 
     def _use_heavy_sword(self, qq_id: str, **kwargs) -> ContentResult:
         """道具5: 沉重的巨剑 - 重掷出1的骰子"""
         return ContentResult(True,
-                           "使用沉重的巨剑！若掷出1，可以选择重掷一次",
+                           "⚔️ 使用沉重的巨剑！\n"
+                           "足以劈开骰子的大剑～\n"
+                           "若任意掷骰掷出1，可以选择重掷一次（.r1d6）\n"
+                           "不过哪怕其仍是1，你都必须接受重掷的数值",
                            {'reroll_on_one': True})
 
     def _use_witch_trick(self, qq_id: str, **kwargs) -> ContentResult:
         """道具6: 女巫的魔法伎俩 - 重掷出6的骰子"""
         return ContentResult(True,
-                           "使用女巫的魔法伎俩！若掷出6，可以选择重掷一次",
+                           "✨ 使用女巫的魔法伎俩！\n"
+                           "悄悄更换花纹的小魔法～\n"
+                           "若任意掷骰掷出6，可以选择重掷一次（.r1d6）\n"
+                           "不过哪怕其仍是6，你都必须接受重掷的数值",
                            {'reroll_on_six': True})
 
     def _use_grow_mushroom(self, qq_id: str, choice: str = None, **kwargs) -> ContentResult:
         """道具7: 变大蘑菇 - 所有出目+1"""
         if choice is None:
             return ContentResult(True,
-                               "获得变大蘑菇！",
+                               "🍄 获得变大蘑菇！\n"
+                               "一个神秘的红帽子胡子大叔给你送来了一块鲜艳的蘑菇碎片。",
                                requires_input=True,
                                choices=["吃", "不吃"])
 
         if choice == "吃":
             return ContentResult(True,
-                               "你吃下了蘑菇，身体不断变大！下次投掷所有结果+1",
+                               "🍄 你吃下了蘑菇！\n"
+                               "你的身体不断变大，同时变大的还有你的骰子点数……\n"
+                               "下次投掷所有结果+1",
                                {'all_dice_plus': 1})
         elif choice == "不吃":
-            return ContentResult(True, "看起来有毒，还是算了")
+            return ContentResult(True, "看起来有毒，还是算了\n无事发生")
 
     def _use_shrink_potion(self, qq_id: str, choice: str = None, **kwargs) -> ContentResult:
         """道具8: 缩小药水 - 所有出目-1"""
         if choice is None:
             return ContentResult(True,
-                               "获得缩小药水！",
+                               "🧪 获得缩小药水！\n"
+                               "一个带着怀表的兔子跑了过去，视线随它移动，你发现杂草中有一个装着什么液体的玻璃瓶，上面写着\"Drink Me\"。",
                                requires_input=True,
                                choices=["喝", "不喝"])
 
         if choice == "喝":
             return ContentResult(True,
-                               "你喝下了药水，身体不断缩小！下次投掷所有结果-1",
+                               "🧪 你喝下了药水！\n"
+                               "你的身体不断缩小，同时缩小的还有你的骰子点数……\n"
+                               "下次投掷所有结果-1",
                                {'all_dice_minus': 1})
         elif choice == "不喝":
-            return ContentResult(True, "陌生人给的不能随便喝，还是算了")
+            return ContentResult(True, "大人从小就说陌生人给的不能随便喝，还是算了\n无事发生")
 
     def _use_super_cannon(self, qq_id: str, desired_rolls: list = None, **kwargs) -> ContentResult:
         """道具9: 超级大炮 - 直接指定出目"""
@@ -1821,71 +2162,166 @@ class ContentHandler:
             return ContentResult(False, "请指定需要的出目 (格式: [1,2,3,4,5,6])")
 
         return ContentResult(True,
-                           f"使用超级大炮！直接指定出目: {desired_rolls}",
+                           f"💥 使用超级大炮！\n"
+                           f"规则就是用来打破的！\n"
+                           f"直接指定出目: {desired_rolls}",
                            {'forced_rolls': desired_rolls})
 
     def _use_golden_star(self, qq_id: str, choice: str = None, **kwargs) -> ContentResult:
         """道具10: :) - 临时标记转永久"""
         if choice is None:
             return ContentResult(True,
-                               "一颗金色的星星在闪耀！",
+                               "⭐ :）\n"
+                               "一颗金色的星星。",
                                requires_input=True,
                                choices=["互动", "不互动"])
 
         if choice == "互动":
             return ContentResult(True,
-                               "这使你充满了决心！本次移动的临时标记转换为永久标记且你可以继续进行当前轮次",
+                               "⭐ \"这使你充满了决心\"\n"
+                               "本次移动的临时标记转换为永久标记且你可以继续进行当前轮次",
                                {'temp_to_permanent': True, 'continue_round': True})
         elif choice == "不互动":
-            return ContentResult(True, "你走了")
+            return ContentResult(True, "你走了\n无事发生")
 
     def _use_ae_mirror(self, qq_id: str, specified_rolls: list = None, **kwargs) -> ContentResult:
-        """道具11: 闹Ae魔镜 - 消耗积分指定出目"""
+        """道具11: 闹Ae魔镜 - 消耗积分指定出目
+        收养人专用道具，如果有契约的Aeonreth对象则费用减半
+        """
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+
         player = self.player_dao.get_player(qq_id)
-        # TODO: 检查是否有契约ae
 
         if not specified_rolls:
-            return ContentResult(False, "请指定出目数值 (每个消耗10积分，格式: [1,2,3])")
+            # 检查是否有契约ae来显示费用
+            partner_qq = contract_dao.get_contract_partner(qq_id)
+            has_ae_partner = False
+            if partner_qq:
+                partner = self.player_dao.get_player(partner_qq)
+                if partner and partner.faction == "Aeonreth":
+                    has_ae_partner = True
 
-        cost = len(specified_rolls) * 10
+            if has_ae_partner:
+                return ContentResult(False,
+                                   "🪞 闹Ae魔镜\n"
+                                   "一个华丽的欧式圆镜，隐约能看到黑紫色的液体在其间流动。\n"
+                                   "💕 你可以借助ae被封锁的力量预判骰点\n"
+                                   "请指定出目数值 (每个消耗5积分，最多6个，格式: [1,2,3])")
+            else:
+                return ContentResult(False,
+                                   "🪞 闹Ae魔镜\n"
+                                   "一个华丽的欧式圆镜，隐约能看到黑紫色的液体在其间流动。\n"
+                                   "💔 无契约ae，直接+5积分\n"
+                                   "或请指定出目数值 (每个消耗10积分，最多6个，格式: [1,2,3])")
+
+        # 检查是否有契约ae
+        partner_qq = contract_dao.get_contract_partner(qq_id)
+        cost_per_roll = 10
+        discount_msg = ""
+
+        if partner_qq:
+            partner = self.player_dao.get_player(partner_qq)
+            if partner and partner.faction == "Aeonreth":
+                cost_per_roll = 5  # 有契约ae费用减半
+                discount_msg = f"\n💕 契约对象 {partner.nickname} 是Aeonreth，费用减半！"
+
+        cost = len(specified_rolls) * cost_per_roll
         if player.current_score < cost:
             return ContentResult(False, f"积分不足！需要{cost}积分")
 
         self.player_dao.add_score(qq_id, -cost)
         return ContentResult(True,
-                           f"使用闹Ae魔镜！消耗{cost}积分，指定出目: {specified_rolls}",
+                           f"🪞 使用闘Ae魔镜！\n"
+                           f"借助ae被封锁的力量预判骰点...\n"
+                           f"消耗{cost}积分，指定出目: {specified_rolls}{discount_msg}",
                            {'partial_forced_rolls': specified_rolls})
 
     def _use_girl_doll(self, qq_id: str, choice: str = None, **kwargs) -> ContentResult:
-        """道具12: 小女孩娃娃 - 免疫陷阱"""
-        # TODO: 检查是否有契约小女孩
+        """道具12: 小女孩娃娃 - 免疫陷阱
+        Aeonreth专用道具，如果有契约的收养人对象则效果增强
+        """
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+
+        # 检查是否有契约收养人
+        partner_qq = contract_dao.get_contract_partner(qq_id)
+        has_girl_partner = False
+        partner_name = ""
+
+        if partner_qq:
+            partner = self.player_dao.get_player(partner_qq)
+            if partner and partner.faction == "收养人":
+                has_girl_partner = True
+                partner_name = partner.nickname
+
         if choice is None:
-            return ContentResult(True,
-                               "一个小女孩模样的娃娃",
-                               requires_input=True,
-                               choices=["戳戳脸蛋", "戳戳手", "拽拽腿"])
+            if has_girl_partner:
+                return ContentResult(True,
+                                   f"🎎 小女孩娃娃\n"
+                                   f"仔细一看，这不是自家小女孩吗？！\n"
+                                   f"💕 你的契约对象 {partner_name} 是收养人，效果增强！",
+                                   requires_input=True,
+                                   choices=["戳戳脸蛋", "戳戳手", "拽拽腿"])
+            else:
+                return ContentResult(True,
+                                   "🎎 小女孩娃娃\n"
+                                   "一个小女孩模样的娃娃。\n"
+                                   "💔 无契约小女孩，直接+5积分",
+                                   requires_input=True,
+                                   choices=["戳戳脸蛋", "戳戳手", "拽拽腿"])
 
         if choice == "戳戳脸蛋":
-            return ContentResult(True,
-                               "小女孩对你笑笑。下个陷阱可以消耗5积分免疫",
-                               {'trap_immunity_cost': 5})
+            if has_girl_partner:
+                return ContentResult(True,
+                                   f"🎎 小女孩对你笑笑～\n"
+                                   f"💕 契约之力加成！下个陷阱可以免费免疫\n"
+                                   f"(必须在遇到陷阱前使用)",
+                                   {'trap_immunity_cost': 0})  # 有契约收养人则免费
+            else:
+                return ContentResult(True,
+                                   "🎎 小女孩对你笑笑～\n"
+                                   "下个陷阱可以消耗5积分免疫\n"
+                                   "(必须在遇到陷阱前使用)",
+                                   {'trap_immunity_cost': 5})
         elif choice == "戳戳手":
-            return ContentResult(True,
-                               "小女孩拉拉你的手。下个陷阱可以通过绘制相关内容免疫",
-                               {'trap_immunity_draw': True})
+            if has_girl_partner:
+                return ContentResult(True,
+                                   f"🎎 小女孩拉拉你的手～\n"
+                                   f"💕 契约之力加成！下两个陷阱可以通过绘制相关内容免疫\n"
+                                   f"(必须在遇到陷阱前使用)",
+                                   {'trap_immunity_draw': True, 'trap_immunity_count': 2})
+            else:
+                return ContentResult(True,
+                                   "🎎 小女孩拉拉你的手～\n"
+                                   "下个陷阱可以通过绘制相关内容免疫\n"
+                                   "(必须在遇到陷阱前使用)",
+                                   {'trap_immunity_draw': True})
         elif choice == "拽拽腿":
-            return ContentResult(True, "小女孩踹了你一脚，有点疼疼的")
+            if has_girl_partner:
+                self.player_dao.add_score(qq_id, 5)
+                return ContentResult(True,
+                                   f"🎎 小女孩踹了你一脚...\n"
+                                   f"但因为 {partner_name} 的契约之力，她又给了你一颗糖！\n"
+                                   f"积分+5")
+            else:
+                return ContentResult(True, "🎎 小女孩踹了你一脚\n有点疼疼的")
 
     def _use_bonfire(self, qq_id: str, **kwargs) -> ContentResult:
         """道具13: 火堆 - 刷新上一个道具"""
         return ContentResult(True,
-                           "使用火堆！可以刷新上一个已使用道具的效果",
+                           "🔥 火堆\n"
+                           "令人安心的温暖火堆，上面插着一根铁签似乎还可以烧烤。\n\n"
+                           "使用后可以刷新上一个已使用道具的效果。",
                            {'refresh_last_item': True})
 
     def _use_liminal_space(self, qq_id: str, **kwargs) -> ContentResult:
         """道具14: 阈限空间 - 失败后重投"""
         return ContentResult(True,
-                           "使用阈限空间！触发失败被动结束后可重新进行上一回合",
+                           "🌀 阈限空间\n"
+                           "你踏入一片空旷寂静的空白。你感受不到时间的存在。\n\n"
+                           "当你进行的轮次触发失败被动结束后，可以使用此道具重新进行上一回合。\n"
+                           "(若结果仍然触发失败被动结束，则不可再重投)",
                            {'allow_retry_on_fail': True})
 
     def _use_pear(self, qq_id: str, reroll_values: list = None, **kwargs) -> ContentResult:
@@ -1896,7 +2332,12 @@ class ContentHandler:
             reroll_values: 要重投的骰子点数列表（例如 [3, 1, 6]）
         """
         if not reroll_values:
-            return ContentResult(False, "请指定要重投的3个骰子点数\n格式：使用一斤鸭梨！ 3,1,6")
+            return ContentResult(False,
+                               "🍐 一斤鸭梨！\n"
+                               "怎么运气又这么差……将思路逆转一下，不是你的运气出了问题，而是系统出了问题！\n"
+                               "你用一斤鸭梨贿赂了管理员得到你想要的结果。\n\n"
+                               "请指定要重投的3个骰子点数\n"
+                               "格式：使用一斤鸭梨！ 3,1,6")
 
         if len(reroll_values) != 3:
             return ContentResult(False, "必须选择3个骰子点数重投")
@@ -1947,57 +2388,112 @@ class ContentHandler:
         state_dao.update_state(state)
 
         return ContentResult(True,
-                           f"✨ 使用一斤鸭梨！\n"
+                           f"🍐 使用一斤鸭梨！\n"
+                           f"贿赂管理员成功！\n\n"
                            f"原结果：{' '.join(map(str, current_dice))}\n"
                            f"保留骰子：{' '.join(map(str, kept_dice))}\n"
                            f"重投骰子：{' '.join(map(str, new_dice))}\n"
                            f"🎲 新结果：{' '.join(map(str, final_dice))}")
 
-    def _use_the_room(self, qq_id: str, location: str = None, **kwargs) -> ContentResult:
+    def _use_the_room(self, qq_id: str, choice: str = None, **kwargs) -> ContentResult:
         """道具16: The Room - 探索获得直接登顶机会"""
-        if location is None:
+        if choice is None:
             return ContentResult(True,
-                               "一处可原地展开的虚拟密闭空间！\n请选择探索位置：",
+                               "🚪 The Room\n"
+                               "一处可原地展开的虚拟密闭空间，只有一次探索机会。\n\n"
+                               "探索位置格式：【（选择1）-（选择2）】\n"
+                               "▹ 桌子: 抽屉 / 摆件 / 连接处\n"
+                               "▹ 放映机: 把手 / 胶卷 / 架子\n"
+                               "▹ 柜子: 隔断 / 柜门 / 顶端\n"
+                               "▹ 地板: 地砖 / 墙角 / 地毯\n\n"
+                               "请选择探索位置：",
                                requires_input=True,
                                choices=["桌子-抽屉", "桌子-摆件", "桌子-连接处",
                                       "放映机-把手", "放映机-胶卷", "放映机-架子",
                                       "柜子-隔断", "柜子-柜门", "柜子-顶端",
                                       "地板-地砖", "地板-墙角", "地板-地毯"])
 
-        if location == "桌子-连接处":
+        # 第一阶段选择：探索位置
+        if choice == "桌子-连接处":
             return ContentResult(True,
-                               "你发现了一个隐藏的小抽屉，里面有一个协会特制徽章！",
+                               "🚪 你发现了一个隐藏的小抽屉，里面有一个协会特制徽章！\n"
+                               "使用这个徽章可以直接登顶一列！",
                                requires_input=True,
                                choices=["直接登顶", "放弃"])
+        elif choice in ["桌子-抽屉", "桌子-摆件",
+                       "放映机-把手", "放映机-胶卷", "放映机-架子",
+                       "柜子-隔断", "柜子-柜门", "柜子-顶端",
+                       "地板-地砖", "地板-墙角", "地板-地毯"]:
+            return ContentResult(True, "🚪 你仔细搜索了一番...\n什么都没有发现...")
+
+        # 第二阶段选择：是否使用徽章登顶
+        elif choice == "直接登顶":
+            return ContentResult(True,
+                               "🎉 你决定使用协会特制徽章！\n"
+                               "请选择要登顶的列（输入列号，如：选择：8）",
+                               requires_input=True,
+                               free_input=True)
+        elif choice == "放弃":
+            return ContentResult(True, "🚪 你放弃了使用徽章的机会...")
+
+        # 第三阶段：选择登顶的列号
         else:
-            return ContentResult(True, "什么都没有发现...")
+            try:
+                column = int(choice)
+                if column < 3 or column > 18:
+                    return ContentResult(False, "❌ 无效的列号，请输入3-18之间的数字")
+                # 返回登顶效果
+                return ContentResult(True,
+                                   f"🎉 协会特制徽章生效！\n你直接登顶了列{column}！",
+                                   {'direct_top_column': column})
+            except ValueError:
+                return ContentResult(False, f"❌ 无效的选择：{choice}")
 
     def _use_my_map(self, qq_id: str, new_column: int = None, new_position: int = None, **kwargs) -> ContentResult:
-        """道具17: 我的地图 - 免疫陷阱并移动陷阱位置"""
-        if new_column is None or new_position is None:
-            return ContentResult(False, "请指定要移动陷阱到的新位置 (格式: column, position)")
+        """道具17: 我的地图 - 触发陷阱时可免疫并移动陷阱
 
+        该道具使用后，下次触发陷阱时自动免疫。
+        移动陷阱功能需要指定目标位置。
+        """
+        # 设置下次陷阱免疫，不消耗积分
         return ContentResult(True,
-                           f"使用我的地图！免疫陷阱并将其移动到({new_column}, {new_position})",
-                           {'move_trap_to': (new_column, new_position)})
+                           "🗺️ 我的地图\n"
+                           "一个dlc操作界面。地图组件竟然可以自己设置了？！\n\n"
+                           "在获得道具后首次触发的陷阱可使用。\n"
+                           "使用后，你可以免疫该陷阱并临时将该陷阱移动到地图任意位置。\n\n"
+                           "📜 我的地图已激活！下次触发陷阱时将自动免疫。\n"
+                           "(如需移动陷阱，请在触发陷阱后指定新位置)",
+                           {'trap_immunity_cost': 0})
 
     def _use_rainbow_gems(self, qq_id: str, **kwargs) -> ContentResult:
         """道具18: 五彩宝石 - 投掷决定效果"""
-        dice_sum = sum([random.randint(1, 6) for _ in range(6)])
+        dice_rolls = [random.randint(1, 6) for _ in range(6)]
+        dice_sum = sum(dice_rolls)
+
+        base_msg = (f"💎 五彩宝石\n"
+                   f"6枚蕴含着强大力量的宝石。\n\n"
+                   f"投掷6d6: [{', '.join(map(str, dice_rolls))}] = {dice_sum}\n\n")
 
         if dice_sum > 9:
             return ContentResult(True,
-                               f"投掷结果: {dice_sum} > 9\n全场随机一半玩家积分-10",
+                               base_msg + f"出目 {dice_sum} > 9\n"
+                               f"⚡ 全场随机一半玩家积分-10\n\n"
+                               f"> \"命运总会到来…\"",
                                {'random_half_minus': 10})
         else:
             self.player_dao.add_score(qq_id, -50)
             return ContentResult(True,
-                               f"投掷结果: {dice_sum} ≤ 9\n你的积分-50")
+                               base_msg + f"出目 {dice_sum} ≤ 9\n"
+                               f"💀 你的积分-50\n\n"
+                               f"> \"命运总会到来…\"")
 
     def _use_shopping_card(self, qq_id: str, **kwargs) -> ContentResult:
         """道具19: 购物卡 - 商店物品半价"""
         return ContentResult(True,
-                           "使用购物卡！下次购买商店物品半价",
+                           "🛒 购物卡\n"
+                           "\"实际上你只是拿了就走\"\n\n"
+                           "商店任一物品可半价购入。\n\n"
+                           "> \"喂！还回来！\"",
                            {'next_purchase_half': True})
 
     def _use_biango_meow(self, qq_id: str, **kwargs) -> ContentResult:
@@ -2016,35 +2512,182 @@ class ContentHandler:
         elif 'item' in reward[1]:
             self.inventory_dao.add_item(qq_id, reward[1]['item'], reward[0].split('：')[1], 'item')
 
-        return ContentResult(True, f"Biango Meow! 喵～\n获得随机奖励: {reward[0]}")
+        return ContentResult(True,
+                           f"🐱 Biango Meow!\n"
+                           f"投了这么多骰子，手酸了吧，这是给你的奖励～\n\n"
+                           f"获得随机奖励: {reward[0]}\n\n"
+                           f"> \"喵～\"")
 
     def _use_black_meow(self, qq_id: str, **kwargs) -> ContentResult:
         """道具21: 黑喵 - 永久减少回合积分消耗"""
         return ContentResult(True,
-                           "使用黑喵！你之后的所有回合所需要消耗的积分-2",
+                           "🐈‍⬛ 黑喵\n"
+                           "喵向你走来…等等，它什么时候变成全身黑色了？\n"
+                           "就在你疑惑之时，喵爪触碰了游戏界面，随即一串乱码开始滚动…\n\n"
+                           "```\n……\nwhile (true)\n……\n```\n\n"
+                           "⚡ 效果：你之后的所有回合所需要消耗的积分-2",
                            {'permanent_cost_reduction': 2})
 
     def _use_fire_statue(self, qq_id: str, **kwargs) -> ContentResult:
         """道具22: 火人雕像 - 随机生成红宝石和蓝池沼"""
-        # 随机选择未到达的格子
+        from database.dao import GemPoolDAO, PositionDAO
+        from data.board_config import COLUMN_HEIGHTS, VALID_COLUMNS
+
+        gem_dao = GemPoolDAO(self.conn)
+        position_dao = PositionDAO(self.conn)
+
+        # 获取玩家已到达的位置
+        positions = position_dao.get_positions(qq_id)
+        reached_positions = set()
+        for pos in positions:
+            # 标记玩家在该列已到达的所有位置（包括之前的格子）
+            for p in range(1, pos.position + 1):
+                reached_positions.add((pos.column_number, p))
+
+        # 收集所有未到达的位置
+        available_positions = []
+        for col in VALID_COLUMNS:
+            height = COLUMN_HEIGHTS[col]
+            for pos in range(1, height + 1):
+                if (col, pos) not in reached_positions:
+                    available_positions.append((col, pos))
+
+        if len(available_positions) < 2:
+            return ContentResult(False, "❌ 地图上没有足够的未到达位置来放置宝石和池沼")
+
+        # 随机选择两个不同的位置
+        gem_pos = random.choice(available_positions)
+        available_positions.remove(gem_pos)
+        pool_pos = random.choice(available_positions)
+
+        # 火人雕像：红色宝石 + 蓝色池沼
+        gem_dao.create_gem(qq_id, 'red_gem', gem_pos[0], gem_pos[1])
+        gem_dao.create_gem(qq_id, 'blue_pool', pool_pos[0], pool_pos[1])
+
         return ContentResult(True,
-                           "使用火人雕像！在地图上随机生成红色宝石(+100积分)和蓝色池沼(-10积分)",
-                           {'spawn_gems': 'fire'})
+                           "🔥 火人雕像 (Aeonreth专用)\n"
+                           "据报道，在古老的神庙之中，OAS协会的探险队发现了两个小小的雕像...\n"
+                           "这尊雕像似乎与Aeonreth们产生了某种共鸣。\n\n"
+                           f"✨ 已在地图上生成：\n"
+                           f"🔴 红色宝石：第{gem_pos[0]}列 第{gem_pos[1]}格 (抵达获得+100积分)\n"
+                           f"🔵 蓝色池沼：位置未知 (抵达-10积分并使宝石消失)\n\n"
+                           "💡 特殊机制：你可以联系管理员知晓一位使用了冰人雕像的玩家其生成的红色池沼位置。")
 
     def _use_ice_statue(self, qq_id: str, **kwargs) -> ContentResult:
         """道具23: 冰人雕像 - 随机生成蓝宝石和红池沼"""
+        from database.dao import GemPoolDAO, PositionDAO
+        from data.board_config import COLUMN_HEIGHTS, VALID_COLUMNS
+
+        gem_dao = GemPoolDAO(self.conn)
+        position_dao = PositionDAO(self.conn)
+
+        # 获取玩家已到达的位置
+        positions = position_dao.get_positions(qq_id)
+        reached_positions = set()
+        for pos in positions:
+            for p in range(1, pos.position + 1):
+                reached_positions.add((pos.column_number, p))
+
+        # 收集所有未到达的位置
+        available_positions = []
+        for col in VALID_COLUMNS:
+            height = COLUMN_HEIGHTS[col]
+            for pos in range(1, height + 1):
+                if (col, pos) not in reached_positions:
+                    available_positions.append((col, pos))
+
+        if len(available_positions) < 2:
+            return ContentResult(False, "❌ 地图上没有足够的未到达位置来放置宝石和池沼")
+
+        # 随机选择两个不同的位置
+        gem_pos = random.choice(available_positions)
+        available_positions.remove(gem_pos)
+        pool_pos = random.choice(available_positions)
+
+        # 冰人雕像：蓝色宝石 + 红色池沼
+        gem_dao.create_gem(qq_id, 'blue_gem', gem_pos[0], gem_pos[1])
+        gem_dao.create_gem(qq_id, 'red_pool', pool_pos[0], pool_pos[1])
+
         return ContentResult(True,
-                           "使用冰人雕像！在地图上随机生成蓝色宝石(+100积分)和红色池沼(-10积分)",
-                           {'spawn_gems': 'ice'})
+                           "❄️ 冰人雕像 (收养人专用)\n"
+                           "据报道，在古老的神庙之中，OAS协会的探险队发现了两个小小的雕像...\n"
+                           "这尊雕像似乎与女孩们产生了某种共鸣。\n\n"
+                           f"✨ 已在地图上生成：\n"
+                           f"🔵 蓝色宝石：第{gem_pos[0]}列 第{gem_pos[1]}格 (抵达获得+100积分)\n"
+                           f"🔴 红色池沼：位置未知 (抵达-10积分并使宝石消失)\n\n"
+                           "💡 特殊机制：你可以联系管理员知晓一位使用了火人雕像的玩家其生成的蓝色池沼位置。")
 
     def _use_soul_leaf(self, qq_id: str, column: int = None, **kwargs) -> ContentResult:
         """道具24: 灵魂之叶 - 永久棋子前进1格"""
         if column is None:
-            return ContentResult(False, "请指定要移动的永久棋子所在列号")
+            return ContentResult(False,
+                               "🍃 灵魂之叶\n"
+                               "你登上一艘巨大的船。虽然可能这不是你的义务，但是你来了就这么做吧！\n"
+                               "你在宁静的氛围里每天为乘客忙上忙下，煮饭，浇水，织布，打铁，为树弹琴……\n"
+                               "一直到了那一天，你的乘客即将离去。\n\n"
+                               "虽然很不舍，但你依旧在红色的水面上送别了它。\n"
+                               "在金色的辉光里，它逐渐上升，上升，最后离开。\n"
+                               "你应当祝福它，对吗？\n\n"
+                               "不论你抱有何种感情，当你回到了船上时，你收到了灵魂最后的赠礼。\n\n"
+                               "请指定要移动的永久棋子所在列号")
 
         return ContentResult(True,
-                           f"使用灵魂之叶！第{column}列的永久棋子向前移动一格",
+                           f"🍃 使用灵魂之叶！\n"
+                           f"灵魂的赠礼生效...\n"
+                           f"第{column}列的永久棋子向前移动一格",
                            {'move_permanent': (column, 1)})
+
+    # ==================== 隐藏道具 ====================
+
+    def _use_underworld_lyre(self, qq_id: str, column: int = None, **kwargs) -> ContentResult:
+        """隐藏道具9116: 冥府里拉琴 - 让契约对象或自己的临时标记前进一格"""
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+
+        # 检查是否有契约对象
+        partner_qq = contract_dao.get_contract_partner(qq_id)
+
+        if column is None:
+            if partner_qq:
+                partner = self.player_dao.get_player(partner_qq)
+                partner_name = partner.nickname if partner else partner_qq
+                return ContentResult(True,
+                                   f"🎻 冥府里拉琴\n"
+                                   f"悠扬的琴声响起，仿佛能跨越生死的界限...\n\n"
+                                   f"💕 你的契约对象：{partner_name}\n"
+                                   f"请指定要移动的临时标记所在列号\n"
+                                   f"格式：使用冥府里拉琴 列号\n"
+                                   f"(契约对象的临时标记将向前移动一格)",
+                                   requires_input=True,
+                                   free_input=True,
+                                   choices=[])
+            else:
+                return ContentResult(True,
+                                   f"🎻 冥府里拉琴\n"
+                                   f"悠扬的琴声响起，仿佛能跨越生死的界限...\n\n"
+                                   f"💔 你没有契约对象，琴声只能为你自己演奏\n"
+                                   f"请指定要移动的临时标记所在列号\n"
+                                   f"格式：使用冥府里拉琴 列号\n"
+                                   f"(你的临时标记将向前移动一格)",
+                                   requires_input=True,
+                                   free_input=True,
+                                   choices=[])
+
+        if partner_qq:
+            partner = self.player_dao.get_player(partner_qq)
+            partner_name = partner.nickname if partner else partner_qq
+            return ContentResult(True,
+                               f"🎻 冥府里拉琴奏响！\n"
+                               f"琴声穿越了空间的阻隔...\n\n"
+                               f"契约对象 {partner_name} 在第{column}列的临时标记向前移动一格\n"
+                               f"(请手动为契约对象更新位置)",
+                               {'contract_partner': partner_qq, 'move_partner_temp': (column, 1)})
+        else:
+            return ContentResult(True,
+                               f"🎻 冥府里拉琴奏响！\n"
+                               f"琴声为你自己演奏...\n\n"
+                               f"你在第{column}列的临时标记向前移动一格",
+                               {'move_temp': (column, 1)})
 
     # ==================== 隐藏成就检测 ====================
 

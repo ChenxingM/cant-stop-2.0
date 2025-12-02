@@ -39,15 +39,7 @@ if __name__ == "__main__":
     config = load_config()
     db_path = config.get('database', {}).get('path', 'data/game.db')
 
-    print("📋 功能说明:")
-    print("  • 查看和管理玩家数据")
-    print("  • 查看游戏进度和统计")
-    print("  • 管理道具和成就")
-    print("  • 数据库操作工具")
-    print()
     print(f"📂 数据库路径: {db_path}")
-    print()
-    print("🎮 启动中...\n")
 
     try:
         # 检查依赖

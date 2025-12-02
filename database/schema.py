@@ -150,6 +150,21 @@ class DatabaseSchema:
         except sqlite3.OperationalError:
             pass
 
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN trap_immunity_cost INTEGER')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN trap_immunity_draw INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN sweet_talk_blocked TEXT')
+        except sqlite3.OperationalError:
+            pass
+
         # ==================== 商店道具表 ====================
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS shop_items (
@@ -161,9 +176,16 @@ class DatabaseSchema:
             global_limit INTEGER DEFAULT -1,
             global_sold INTEGER DEFAULT 0,
             unlocked BOOLEAN DEFAULT 0,
-            description TEXT
+            description TEXT,
+            player_limit INTEGER DEFAULT -1
         )
         ''')
+
+        # 添加 player_limit 字段（如果不存在）
+        try:
+            cursor.execute('ALTER TABLE shop_items ADD COLUMN player_limit INTEGER DEFAULT -1')
+        except sqlite3.OperationalError:
+            pass
 
         # ==================== 每日限制记录表 ====================
         cursor.execute('''
@@ -221,6 +243,35 @@ class DatabaseSchema:
             qq_id TEXT NOT NULL,
             finished_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (qq_id) REFERENCES players(qq_id)
+        )
+        ''')
+
+        # ==================== 契约关系表 ====================
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS player_contracts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player1_qq TEXT NOT NULL,
+            player2_qq TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (player1_qq) REFERENCES players(qq_id),
+            FOREIGN KEY (player2_qq) REFERENCES players(qq_id),
+            UNIQUE(player1_qq),
+            UNIQUE(player2_qq)
+        )
+        ''')
+
+        # ==================== 宝石池沼表 ====================
+        # 存储火人雕像/冰人雕像生成的宝石和池沼
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS gem_pools (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_qq TEXT NOT NULL,
+            gem_type TEXT NOT NULL CHECK(gem_type IN ('red_gem', 'blue_gem', 'red_pool', 'blue_pool')),
+            column_number INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (owner_qq) REFERENCES players(qq_id)
         )
         ''')
 

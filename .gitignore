@@ -8,3 +8,5 @@ engine/__pycache__/
 gui/__pycache__/
 
 *.pyc
+
+logs/

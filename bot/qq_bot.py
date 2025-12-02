@@ -10,6 +10,7 @@ import aiohttp
 from typing import Optional, Dict, Callable
 from dataclasses import dataclass
 import logging
+from datetime import datetime
 
 import sys
 from pathlib import Path
@@ -20,8 +21,45 @@ from engine.command_parser import CommandParser, COMMAND_HANDLERS
 from database.schema import init_database
 
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+def setup_logging():
+    """配置日志系统：控制台完整输出 + 文件记录"""
+    # 确保logs目录存在
+    log_dir = Path(__file__).parent.parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # 生成日志文件名（按启动时间）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"bot_{timestamp}.log"
+
+    # 创建根日志记录器
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # 清除已有的处理器
+    logger.handlers.clear()
+
+    # 日志格式（完整格式，不省略）
+    formatter = logging.Formatter(
+        fmt='[%(asctime)s] [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # 控制台处理器
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # 文件处理器
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    return logging.getLogger(__name__), log_file
+
+
+logger, current_log_file = setup_logging()
 
 
 @dataclass
@@ -159,7 +197,7 @@ class QQBot:
         if self.config.allowed_groups and group_id not in self.config.allowed_groups:
             return
 
-        logger.info(f"[群{group_id}] {nickname}({user_id}): {message}")
+        logger.info(f"[收到群消息] 群{group_id} | {nickname}({user_id})\n{message}")
 
         # 解析纯文本消息
         text_message = self._extract_text(message)
@@ -198,11 +236,16 @@ class QQBot:
     async def _execute_command(self, qq_id: str, nickname: str, command) -> Optional[str]:
         """执行游戏指令"""
         # 确保玩家已注册
-        self.game_engine.register_or_get_player(qq_id, nickname)
+        player, is_new = self.game_engine.register_or_get_player(qq_id, nickname)
+
+        # 新玩家注册提示
+        welcome_msg = ""
+        if is_new:
+            welcome_msg = f"🎉 欢迎 {nickname} 加入贪骰无厌！\n请先选择阵营才能开始游戏：\n• 选择阵营：收养人\n• 选择阵营：Aeonreth\n\n"
 
         # 特殊处理help指令
         if command.type == 'help':
-            return CommandParser.format_help()
+            return welcome_msg + CommandParser.format_help()
 
         # 获取对应的游戏引擎方法
         handler_name = COMMAND_HANDLERS.get(command.type)
@@ -236,7 +279,7 @@ class QQBot:
             # 调用处理器
             result = handler(qq_id, **params)
 
-            return result.message
+            return welcome_msg + result.message
 
         except Exception as e:
             logger.error(f"执行指令失败: {e}", exc_info=True)
@@ -247,7 +290,7 @@ class QQBot:
 
         Args:
             group_id: 群号
-            message: 消息内容
+            message: 消息内容（支持 [IMAGE:path] 标记嵌入图片）
             at_qq: 要@的QQ号（可选）
         """
         if not self.ws or self.ws.closed:
@@ -268,11 +311,41 @@ class QQBot:
                 "data": {"text": " "}  # @后面加个空格
             })
 
-        # 添加文本消息段
-        message_segments.append({
-            "type": "text",
-            "data": {"text": message}
-        })
+        # 检查消息中是否有图片标记 [IMAGE:path]
+        import re
+        from pathlib import Path
+
+        image_pattern = r'\[IMAGE:([^\]]+)\]'
+        parts = re.split(image_pattern, message)
+
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                # 文本部分
+                if part.strip():
+                    message_segments.append({
+                        "type": "text",
+                        "data": {"text": part}
+                    })
+            else:
+                # 图片路径部分
+                image_path = Path(part)
+                if not image_path.is_absolute():
+                    # 相对路径转绝对路径
+                    image_path = Path(__file__).parent.parent / part
+
+                if image_path.exists():
+                    # 使用 file:// 协议发送本地图片
+                    message_segments.append({
+                        "type": "image",
+                        "data": {"file": f"file:///{image_path.resolve()}"}
+                    })
+                    logger.info(f"添加图片: {image_path}")
+                else:
+                    logger.warning(f"图片文件不存在: {image_path}")
+                    message_segments.append({
+                        "type": "text",
+                        "data": {"text": f"[图片加载失败: {part}]"}
+                    })
 
         # OneBot v11 WebSocket API 格式
         action_data = {
@@ -285,7 +358,9 @@ class QQBot:
 
         try:
             await self.ws.send_json(action_data)
-            logger.info(f"发送消息成功: {message[:50]}...")
+            # 完整输出消息内容，图片路径替换为[图片]标记
+            text_full = re.sub(image_pattern, '[图片]', message)
+            logger.info(f"[发送群消息] 群{group_id}\n{text_full}")
         except Exception as e:
             logger.error(f"发送消息异常: {e}")
 
@@ -306,7 +381,7 @@ class QQBot:
 
         try:
             await self.ws.send_json(action_data)
-            logger.info(f"发送私聊成功: {message[:50]}...")
+            logger.info(f"[发送私聊] 用户{user_id}\n{message}")
         except Exception as e:
             logger.error(f"发送私聊异常: {e}")
 
@@ -347,6 +422,7 @@ async def main():
     logger.info("=" * 60)
     logger.info("贪骰无厌 2.0 - QQ机器人")
     logger.info("=" * 60)
+    logger.info(f"日志文件: {current_log_file}")
     logger.info(f"WebSocket URL: {config.ws_url}")
     logger.info(f"允许的群组: {config.allowed_groups}")
     logger.info(f"重连: {'启用' if config.reconnect else '禁用'}")

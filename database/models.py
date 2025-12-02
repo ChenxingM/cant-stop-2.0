@@ -74,6 +74,13 @@ class PlayerGameState:
     lockout_until: Optional[str] = None  # 锁定到的时间（ISO格式字符串）
     pending_trap_choice: Optional[Dict] = None  # 等待处理的陷阱选择
 
+    # 陷阱免疫状态
+    trap_immunity_cost: Optional[int] = None  # 下个陷阱可消耗积分免疫（小女孩娃娃-戳脸蛋）
+    trap_immunity_draw: bool = False  # 下个陷阱可通过绘制免疫（小女孩娃娃-戳手）
+
+    # 花言巧语封锁状态
+    sweet_talk_blocked: Optional[Dict] = None  # {blocked_columns: [列号], from_qq: 施放者QQ}
+
     def to_dict(self) -> dict:
         """转换为字典（用于存储）"""
         return {
@@ -94,7 +101,10 @@ class PlayerGameState:
             'odd_even_check_active': int(self.odd_even_check_active),
             'math_check_active': int(self.math_check_active),
             'lockout_until': self.lockout_until,
-            'pending_trap_choice': json.dumps(self.pending_trap_choice) if self.pending_trap_choice else None
+            'pending_trap_choice': json.dumps(self.pending_trap_choice) if self.pending_trap_choice else None,
+            'trap_immunity_cost': self.trap_immunity_cost,
+            'trap_immunity_draw': int(self.trap_immunity_draw),
+            'sweet_talk_blocked': json.dumps(self.sweet_talk_blocked) if self.sweet_talk_blocked else None
         }
 
     @staticmethod
@@ -125,6 +135,9 @@ class PlayerGameState:
         pending_trap_choice_raw = data.get('pending_trap_choice')
         pending_trap_choice = json.loads(pending_trap_choice_raw) if pending_trap_choice_raw else None
 
+        sweet_talk_blocked_raw = data.get('sweet_talk_blocked')
+        sweet_talk_blocked = json.loads(sweet_talk_blocked_raw) if sweet_talk_blocked_raw else None
+
         return PlayerGameState(
             qq_id=qq_id,
             current_round_active=bool(data.get('current_round_active', 0)),
@@ -144,7 +157,10 @@ class PlayerGameState:
             odd_even_check_active=bool(data.get('odd_even_check_active', 0)),
             math_check_active=bool(data.get('math_check_active', 0)),
             lockout_until=data.get('lockout_until'),
-            pending_trap_choice=pending_trap_choice
+            pending_trap_choice=pending_trap_choice,
+            trap_immunity_cost=data.get('trap_immunity_cost'),
+            trap_immunity_draw=bool(data.get('trap_immunity_draw', 0)),
+            sweet_talk_blocked=sweet_talk_blocked
         )
 
 
@@ -160,9 +176,15 @@ class ShopItem:
     global_sold: int = 0
     unlocked: bool = False
     description: Optional[str] = None
+    player_limit: int = -1  # 每人限购数量，-1表示无限制
 
-    def can_buy(self, player: Player) -> tuple[bool, str]:
-        """检查玩家是否可以购买"""
+    def can_buy(self, player: Player, current_owned: int = 0) -> tuple[bool, str]:
+        """检查玩家是否可以购买
+
+        Args:
+            player: 玩家对象
+            current_owned: 玩家当前拥有该道具的数量
+        """
         # 检查是否解锁
         if not self.unlocked and self.item_type != 'special':
             return False, "该道具尚未解锁"
@@ -181,6 +203,10 @@ class ShopItem:
         # 检查全局限制
         if self.global_limit > 0 and self.global_sold >= self.global_limit:
             return False, "该道具已售罄"
+
+        # 检查每人限购
+        if self.player_limit > 0 and current_owned >= self.player_limit:
+            return False, f"该道具每人限购{self.player_limit}个，您已拥有{current_owned}个"
 
         return True, "可以购买"
 
@@ -253,6 +279,12 @@ ACHIEVEMENTS = {
     "special_effect": {"name": "善恶有报", "desc": "三次遭遇触发特殊效果", "reward": "游戏机打折券"},
     "meta": {"name": "天机算不尽", "desc": "解锁3个隐藏成就", "reward": "套娃"},
     "host_doubt": {"name": "主持人的猜忌", "desc": "2次遭遇陷阱后触发奖励", "reward": "黄牌警告"},
+
+    # 陷阱检定成就
+    "math_king": {"name": "数学大王", "desc": "奇偶检定通过（奇数>3个）", "reward_score": 10},
+    "math_zero": {"name": "数学0蛋", "desc": "奇偶检定失败（奇数≤3个）", "reward_score": 0},
+    "crying_student": {"name": "哭哭做题家", "desc": "数学检定失败（组合<8种）", "reward_score": 0},
+    "pass_through": {"name": "进去吧你！", "desc": "数学检定通过（组合≥8种）", "reward_score": 10},
 }
 
 

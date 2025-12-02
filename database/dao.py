@@ -174,12 +174,21 @@ class PositionDAO:
         self.conn.commit()
 
     def clear_temp_position_by_column(self, qq_id: str, column: int):
-        """清除指定列的临时标记"""
+        """清除指定玩家在指定列的临时标记"""
         cursor = self.conn.cursor()
         cursor.execute('''
             DELETE FROM player_positions
             WHERE qq_id = ? AND column_number = ? AND marker_type = 'temp'
         ''', (qq_id, column))
+        self.conn.commit()
+
+    def clear_all_temp_positions_by_column(self, column: int):
+        """清除所有玩家在指定列的临时标记（登顶时调用）"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            DELETE FROM player_positions
+            WHERE column_number = ? AND marker_type = 'temp'
+        ''', (column,))
         self.conn.commit()
 
     def convert_temp_to_permanent(self, qq_id: str):
@@ -207,6 +216,25 @@ class PositionDAO:
             SET marker_type = 'permanent'
             WHERE qq_id = ? AND marker_type = 'temp'
         ''', (qq_id,))
+
+        self.conn.commit()
+
+    def convert_temp_to_permanent_by_column(self, qq_id: str, column: int):
+        """将指定列的临时标记转换为永久标记"""
+        cursor = self.conn.cursor()
+
+        # 首先删除该列已有的永久标记
+        cursor.execute('''
+            DELETE FROM player_positions
+            WHERE qq_id = ? AND column_number = ? AND marker_type = 'permanent'
+        ''', (qq_id, column))
+
+        # 将该列的临时标记转换为永久标记
+        cursor.execute('''
+            UPDATE player_positions
+            SET marker_type = 'permanent'
+            WHERE qq_id = ? AND column_number = ? AND marker_type = 'temp'
+        ''', (qq_id, column))
 
         self.conn.commit()
 
@@ -322,6 +350,16 @@ class InventoryDAO:
         row = cursor.fetchone()
         return row['count'] > 0
 
+    def get_item_count(self, qq_id: str, item_id: int, item_type: str = 'item') -> int:
+        """获取玩家拥有某物品的数量"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT COALESCE(SUM(quantity), 0) as total FROM player_inventory
+            WHERE qq_id = ? AND item_id = ? AND item_type = ?
+        ''', (qq_id, item_id, item_type))
+        row = cursor.fetchone()
+        return row['total']
+
 
 class GameStateDAO:
     """游戏状态数据访问对象"""
@@ -366,7 +404,10 @@ class GameStateDAO:
                 odd_even_check_active = ?,
                 math_check_active = ?,
                 lockout_until = ?,
-                pending_trap_choice = ?
+                pending_trap_choice = ?,
+                trap_immunity_cost = ?,
+                trap_immunity_draw = ?,
+                sweet_talk_blocked = ?
             WHERE qq_id = ?
         ''', (
             data['current_round_active'],
@@ -387,6 +428,9 @@ class GameStateDAO:
             data['math_check_active'],
             data['lockout_until'],
             data['pending_trap_choice'],
+            data['trap_immunity_cost'],
+            data['trap_immunity_draw'],
+            data['sweet_talk_blocked'],
             state.qq_id
         ))
         self.conn.commit()
@@ -417,7 +461,8 @@ class ShopDAO:
             global_limit=row['global_limit'],
             global_sold=row['global_sold'],
             unlocked=bool(row['unlocked']),
-            description=row['description']
+            description=row['description'],
+            player_limit=row['player_limit'] if 'player_limit' in row.keys() else -1
         ) for row in rows]
 
     def get_item(self, item_id: int) -> Optional[ShopItem]:
@@ -438,7 +483,8 @@ class ShopDAO:
             global_limit=row['global_limit'],
             global_sold=row['global_sold'],
             unlocked=bool(row['unlocked']),
-            description=row['description']
+            description=row['description'],
+            player_limit=row['player_limit'] if 'player_limit' in row.keys() else -1
         )
 
     def get_item_by_name(self, item_name: str) -> Optional[ShopItem]:
@@ -459,7 +505,8 @@ class ShopDAO:
             global_limit=row['global_limit'],
             global_sold=row['global_sold'],
             unlocked=bool(row['unlocked']),
-            description=row['description']
+            description=row['description'],
+            player_limit=row['player_limit'] if 'player_limit' in row.keys() else -1
         )
 
     def unlock_item(self, item_id: int):
@@ -553,3 +600,198 @@ class DailyLimitDAO:
         count = self.get_count(qq_id, action_type)
         remaining = max(0, limit - count)
         return count < limit, remaining
+
+
+class ContractDAO:
+    """契约关系数据访问对象"""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def create_contract(self, player1_qq: str, player2_qq: str) -> Tuple[bool, str]:
+        """
+        建立契约关系
+        返回: (是否成功, 消息)
+        """
+        cursor = self.conn.cursor()
+
+        # 检查两人是否已有契约
+        existing1 = self.get_contract_partner(player1_qq)
+        existing2 = self.get_contract_partner(player2_qq)
+
+        if existing1:
+            return False, f"您已经与其他玩家建立了契约关系"
+        if existing2:
+            return False, f"对方已经与其他玩家建立了契约关系"
+
+        # 建立契约（确保player1_qq < player2_qq以保持一致性）
+        if player1_qq > player2_qq:
+            player1_qq, player2_qq = player2_qq, player1_qq
+
+        try:
+            cursor.execute('''
+                INSERT INTO player_contracts (player1_qq, player2_qq)
+                VALUES (?, ?)
+            ''', (player1_qq, player2_qq))
+            self.conn.commit()
+            return True, "契约建立成功"
+        except Exception as e:
+            return False, f"契约建立失败: {str(e)}"
+
+    def get_contract_partner(self, qq_id: str) -> Optional[str]:
+        """获取契约对象的QQ号，如果没有返回None"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT player1_qq, player2_qq FROM player_contracts
+            WHERE player1_qq = ? OR player2_qq = ?
+        ''', (qq_id, qq_id))
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        # 返回另一方的QQ号
+        if row['player1_qq'] == qq_id:
+            return row['player2_qq']
+        else:
+            return row['player1_qq']
+
+    def has_contract(self, qq_id: str) -> bool:
+        """检查玩家是否有契约"""
+        return self.get_contract_partner(qq_id) is not None
+
+    def are_contracted(self, qq_id1: str, qq_id2: str) -> bool:
+        """检查两个玩家是否互为契约对象"""
+        partner = self.get_contract_partner(qq_id1)
+        return partner == qq_id2
+
+    def remove_contract(self, qq_id: str) -> bool:
+        """解除契约关系"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            DELETE FROM player_contracts
+            WHERE player1_qq = ? OR player2_qq = ?
+        ''', (qq_id, qq_id))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_all_contracts(self) -> List[Tuple[str, str, str]]:
+        """获取所有契约关系，返回 [(player1_qq, player2_qq, created_at), ...]"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT player1_qq, player2_qq, created_at FROM player_contracts')
+        rows = cursor.fetchall()
+        return [(row['player1_qq'], row['player2_qq'], row['created_at']) for row in rows]
+
+
+class GemPoolDAO:
+    """宝石池沼数据访问对象"""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def create_gem(self, owner_qq: str, gem_type: str, column: int, position: int) -> int:
+        """
+        创建宝石或池沼
+        gem_type: 'red_gem', 'blue_gem', 'red_pool', 'blue_pool'
+        返回: 记录ID
+        """
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT INTO gem_pools (owner_qq, gem_type, column_number, position)
+            VALUES (?, ?, ?, ?)
+        ''', (owner_qq, gem_type, column, position))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_player_gems(self, owner_qq: str, active_only: bool = True) -> List[Dict]:
+        """获取玩家创建的所有宝石和池沼"""
+        cursor = self.conn.cursor()
+        if active_only:
+            cursor.execute('''
+                SELECT * FROM gem_pools
+                WHERE owner_qq = ? AND is_active = 1
+            ''', (owner_qq,))
+        else:
+            cursor.execute('''
+                SELECT * FROM gem_pools WHERE owner_qq = ?
+            ''', (owner_qq,))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_gem_at_position(self, column: int, position: int, active_only: bool = True) -> List[Dict]:
+        """获取指定位置的所有宝石和池沼"""
+        cursor = self.conn.cursor()
+        if active_only:
+            cursor.execute('''
+                SELECT * FROM gem_pools
+                WHERE column_number = ? AND position = ? AND is_active = 1
+            ''', (column, position))
+        else:
+            cursor.execute('''
+                SELECT * FROM gem_pools
+                WHERE column_number = ? AND position = ?
+            ''', (column, position))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_all_active_gems(self) -> List[Dict]:
+        """获取所有活跃的宝石和池沼"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT gp.*, p.nickname as owner_name
+            FROM gem_pools gp
+            LEFT JOIN players p ON gp.owner_qq = p.qq_id
+            WHERE gp.is_active = 1
+        ''')
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def deactivate_gem(self, gem_id: int):
+        """使宝石/池沼失效"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            UPDATE gem_pools SET is_active = 0 WHERE id = ?
+        ''', (gem_id,))
+        self.conn.commit()
+
+    def deactivate_player_gems(self, owner_qq: str, gem_type: str = None):
+        """使玩家的宝石/池沼失效
+        如果指定gem_type则只使该类型失效，否则使所有类型失效
+        """
+        cursor = self.conn.cursor()
+        if gem_type:
+            cursor.execute('''
+                UPDATE gem_pools SET is_active = 0
+                WHERE owner_qq = ? AND gem_type = ?
+            ''', (owner_qq, gem_type))
+        else:
+            cursor.execute('''
+                UPDATE gem_pools SET is_active = 0 WHERE owner_qq = ?
+            ''', (owner_qq,))
+        self.conn.commit()
+
+    def get_opposite_pool_positions(self, statue_type: str) -> List[Dict]:
+        """
+        获取使用相反雕像玩家的池沼位置
+        statue_type: 'fire' 返回冰人雕像的红色池沼位置
+                    'ice' 返回火人雕像的蓝色池沼位置
+        """
+        cursor = self.conn.cursor()
+        if statue_type == 'fire':
+            # 火人雕像用户想知道冰人雕像用户的红色池沼位置
+            cursor.execute('''
+                SELECT gp.*, p.nickname as owner_name
+                FROM gem_pools gp
+                LEFT JOIN players p ON gp.owner_qq = p.qq_id
+                WHERE gp.gem_type = 'red_pool' AND gp.is_active = 1
+            ''')
+        else:
+            # 冰人雕像用户想知道火人雕像用户的蓝色池沼位置
+            cursor.execute('''
+                SELECT gp.*, p.nickname as owner_name
+                FROM gem_pools gp
+                LEFT JOIN players p ON gp.owner_qq = p.qq_id
+                WHERE gp.gem_type = 'blue_pool' AND gp.is_active = 1
+            ''')
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]

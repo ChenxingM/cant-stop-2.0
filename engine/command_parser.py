@@ -53,10 +53,18 @@ class CommandParser:
         # 遭遇/道具选择
         'make_choice': r'^选择[:：]?\s*(.+)$',
 
+        # 陷阱选择
+        'make_trap_choice': r'^陷阱选择[:：]?\s*(.+)$',
+
         # 特殊功能
         'pet_cat': r'^摸摸喵$',
         'feed_cat': r'^投喂喵$',
         'squeeze_doll': r'^捏捏丑喵玩偶$',
+
+        # 契约系统
+        'bind_contract': r'^绑定契约对象\s*@?(\d+)$',
+        'view_contract': r'^查看契约$',
+        'remove_contract': r'^解除契约$',
     }
 
     @classmethod
@@ -135,31 +143,79 @@ class CommandParser:
                 raw_input = raw_input[2:].strip()
 
             # 尝试分离道具名称和参数
-            # 格式1: "一斤鸭梨！ 3,1,6" (骰子点数)
-            # 格式2: "一斤鸭梨！ [3,1,6]"
-            parts = raw_input.split(maxsplit=1)
-            item_name = parts[0]
+            # 支持的格式:
+            # 1. "揍击派对（通用）14,6" - 括号结尾 + 数字坐标
+            # 2. "揍击派对（通用） 14,6" - 括号结尾 + 空格 + 数字坐标
+            # 3. "揍击派对（通用）（14,6）" - 括号结尾 + 括号包裹的数字
+            # 4. "揍击派对 14,6" - 空格分隔 + 坐标
+            # 5. "一斤鸭梨！ 3,1,6" - 多个数字
+            # 6. "花言巧语（通用）906081155" - 括号结尾 + 单个数字（QQ号）
+            # 7. "花言巧语（通用） 906081155" - 括号结尾 + 空格 + 单个数字
 
-            # 移除阵营标签（如 [收养人专用]、[Aeonreth专用]）
-            item_name = re.sub(r'\s*\[.+?专用\]\s*$', '', item_name)
+            # 先尝试匹配括号包裹的坐标：（14,6）或 (14,6)
+            bracket_coord_match = re.match(r'^(.+?)\s*[（\(](\d+)\s*[,，]\s*(\d+)[）\)]$', raw_input)
+            if bracket_coord_match:
+                item_name = bracket_coord_match.group(1).strip()
+                param_str = f"{bracket_coord_match.group(2)},{bracket_coord_match.group(3)}"
+            else:
+                # 匹配：括号结尾 + 可选空格 + 数字参数（坐标格式，带逗号）
+                coord_match = re.match(r'^(.+?[）\]])\s*(\d+\s*,\s*[\d,\s]+)$', raw_input)
+                if not coord_match:
+                    # 或者：任意内容 + 必须空格 + 数字参数（坐标格式，带逗号）
+                    coord_match = re.match(r'^(.+?)\s+(\d+\s*,\s*[\d,\s]+)$', raw_input)
+                if coord_match:
+                    item_name = coord_match.group(1).strip()
+                    param_str = coord_match.group(2).strip()
+                else:
+                    # 尝试匹配单个数字（如QQ号）：括号结尾 + 可选空格 + 纯数字
+                    single_num_match = re.match(r'^(.+?[）\]])\s*(\d+)$', raw_input)
+                    if not single_num_match:
+                        # 或者：任意内容 + 空格 + 纯数字
+                        single_num_match = re.match(r'^(.+?)\s+(\d+)$', raw_input)
+                    if single_num_match:
+                        item_name = single_num_match.group(1).strip()
+                        param_str = single_num_match.group(2).strip()
+                    else:
+                        # 没有数字参数，整个输入就是道具名
+                        item_name = raw_input
+                        param_str = None
+
+            # 移除阵营标签（如 [收养人专用]、[Aeonreth专用]、（通用）等）
+            item_name = re.sub(r'\s*[\[（].*?[\]）]\s*$', '', item_name)
             params['item_name'] = item_name.strip()
 
             # 如果有额外参数，尝试解析
-            if len(parts) > 1:
-                param_str = parts[1].strip()
-                # 移除方括号（如果有）
-                param_str = param_str.strip('[]')
-                # 尝试解析为数字列表（骰子点数，用于一斤鸭梨！等道具）
+            if param_str:
+                # 移除各种括号（如果有）
+                param_str = re.sub(r'^[（\(\[]+', '', param_str)
+                param_str = re.sub(r'[）\)\]]+$', '', param_str)
+                # 尝试解析为数字列表
                 try:
+                    # 支持中英文逗号
+                    param_str = param_str.replace('，', ',')
                     if ',' in param_str:
-                        params['reroll_values'] = [int(x.strip()) for x in param_str.split(',')]
+                        numbers = [int(x.strip()) for x in param_str.split(',')]
+                        # 如果是2个数字，可能是坐标（用于我的地图等道具）
+                        if len(numbers) == 2:
+                            params['new_column'] = numbers[0]
+                            params['new_position'] = numbers[1]
+                        else:
+                            # 否则是骰子点数（用于一斤鸭梨！等道具）
+                            params['reroll_values'] = numbers
                     else:
-                        params['extra_param'] = param_str
+                        # 单个数字，可能是QQ号（用于花言巧语等道具）
+                        params['target_qq'] = param_str
                 except ValueError:
                     params['extra_param'] = param_str
 
         elif cmd_type == 'make_choice':
             params['choice'] = match.group(1).strip()
+
+        elif cmd_type == 'make_trap_choice':
+            params['choice'] = match.group(1).strip()
+
+        elif cmd_type == 'bind_contract':
+            params['target_qq'] = match.group(1).strip()
 
         return params
 
@@ -210,16 +266,23 @@ class CommandParser:
 • 购买道具名称 - 购买道具
 • 使用道具名称 - 使用道具
 • 使用一斤鸭梨！ 3,1,6 - 重投指定点数的3个骰子
+• 使用我的地图 7,5 - 移动陷阱到第7列第5格
 • 添加道具名称到道具商店 - 解锁道具
 
-🎭 遭遇选择
+🎭 遭遇/陷阱选择
 • 选择：打歌! - 对遭遇进行选择
+• 陷阱选择：移动到列11 - 对陷阱进行选择
 
 😺 特殊功能
 • 摸摸喵 - 每天限5次
 • 投喂喵 - 每天限5次
 • 购买丑喵玩偶 - 购买玩偶（150积分）
 • 捏捏丑喵玩偶 - 使用玩偶（每天3次）
+
+💕 契约系统
+• 绑定契约对象@QQ号 - 与指定玩家建立契约
+• 查看契约 - 查看当前契约关系
+• 解除契约 - 解除现有契约关系
 
 """
         return help_text.strip()
@@ -246,9 +309,13 @@ COMMAND_HANDLERS = {
     'buy_item': 'buy_item',
     'use_item': 'use_item',
     'make_choice': 'make_choice',
+    'make_trap_choice': 'make_trap_choice',
     'pet_cat': 'pet_cat',
     'feed_cat': 'feed_cat',
     'squeeze_doll': 'squeeze_doll',
+    'bind_contract': 'bind_contract',
+    'view_contract': 'view_contract',
+    'remove_contract': 'remove_contract',
 }
 
 
