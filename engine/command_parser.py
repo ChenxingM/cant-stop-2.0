@@ -29,6 +29,7 @@ class CommandParser:
         # 游戏进行
         'start_round': r'^轮次开始$',
         'roll_dice': r'^\.r(\d+)d(\d+)$',
+        'reroll': r'^重投$',
         'record_single': r'^(\d+)$',
         'record_double': r'^(\d+)[,，]\s*(\d+)$',
         'end_active': r'^替换永久棋子$',
@@ -45,6 +46,11 @@ class CommandParser:
         'claim_reward': r'^领取(.+?)奖励(\d+)([*x×]\d+)?$',
         'claim_super': r'^我超级满意这张图(\d+)$',
         'claim_top': r'^数列(\d+)登顶$',
+
+        # 特殊效果使用（需要在use_item之前，因为更特定）
+        'use_last_dice': r'^使用上轮骰子[:：]?\s*(\d+)[,，](\d+)[,，](\d+)$',  # 使用上轮骰子：3,4,5
+        'change_dice': r'^修改骰子[:：]?\s*(\d+)[,，](\d+)$',  # 修改骰子：位置,新值
+        'add_3_dice': r'^骰子加3[:：]?\s*(\d+)$',  # 骰子加3：位置
 
         # 道具相关
         'buy_item': r'^购买(.+)$',
@@ -217,6 +223,16 @@ class CommandParser:
         elif cmd_type == 'bind_contract':
             params['target_qq'] = match.group(1).strip()
 
+        elif cmd_type == 'use_last_dice':
+            params['dice_values'] = [int(match.group(1)), int(match.group(2)), int(match.group(3))]
+
+        elif cmd_type == 'change_dice':
+            params['dice_index'] = int(match.group(1))  # 骰子位置（1-6）
+            params['new_value'] = int(match.group(2))   # 新值（1-6）
+
+        elif cmd_type == 'add_3_dice':
+            params['dice_index'] = int(match.group(1))  # 骰子位置（1-6）
+
         return params
 
     @classmethod
@@ -284,6 +300,11 @@ class CommandParser:
 • 查看契约 - 查看当前契约关系
 • 解除契约 - 解除现有契约关系
 
+✨ 特殊效果
+• 使用上轮骰子：3,4,5 - 用上轮骰子值替换本轮（时空镜效果）
+• 修改骰子：2,6 - 把第2个骰子改成6（红药丸/AI管家/面具Ae效果）
+• 骰子加3：2 - 把第2个骰子+3（面具收养人效果）
+
 """
         return help_text.strip()
 
@@ -294,6 +315,7 @@ COMMAND_HANDLERS = {
     'help': None,  # 特殊处理
     'start_round': 'start_round',
     'roll_dice': 'roll_dice',
+    'reroll': 'reroll_dice',
     'record_single': 'record_values',
     'record_double': 'record_values',
     'end_active': 'end_round_active',
@@ -316,6 +338,9 @@ COMMAND_HANDLERS = {
     'bind_contract': 'bind_contract',
     'view_contract': 'view_contract',
     'remove_contract': 'remove_contract',
+    'use_last_dice': 'use_last_dice',
+    'change_dice': 'change_dice',
+    'add_3_dice': 'add_3_dice',
 }
 
 

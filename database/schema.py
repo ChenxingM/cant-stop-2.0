@@ -161,7 +161,125 @@ class DatabaseSchema:
             pass
 
         try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN trap_immunity_count INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN requires_drawing INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
             cursor.execute('ALTER TABLE game_state ADD COLUMN sweet_talk_blocked TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        # 道具效果相关字段
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN allow_reroll INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN reroll_on_one INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN reroll_on_six INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN all_dice_modifier INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN forced_rolls TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN partial_forced_rolls TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN allow_retry_on_fail INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN next_purchase_half INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN cost_reduction INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN last_used_item_id INTEGER')
+        except sqlite3.OperationalError:
+            pass
+
+        # 遭遇效果相关字段
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN immune_next_trap INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN free_rounds INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN next_roll_double_cost INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN change_one_dice_available INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN use_last_dice_available INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN frozen_columns TEXT')
+        except sqlite3.OperationalError:
+            pass
+
+        # 新增遭遇效果字段
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN must_draw_double INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN force_end_until_draw INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN next_dice_modify_any INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN next_dice_add_3_any INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN disabled_columns_this_round TEXT')
         except sqlite3.OperationalError:
             pass
 

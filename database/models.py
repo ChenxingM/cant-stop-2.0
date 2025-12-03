@@ -77,9 +77,38 @@ class PlayerGameState:
     # 陷阱免疫状态
     trap_immunity_cost: Optional[int] = None  # 下个陷阱可消耗积分免疫（小女孩娃娃-戳脸蛋）
     trap_immunity_draw: bool = False  # 下个陷阱可通过绘制免疫（小女孩娃娃-戳手）
+    trap_immunity_count: int = 0  # 可绘制免疫的陷阱数量（契约加成时为2）
+    requires_drawing: bool = False  # 婚戒陷阱：需要完成绘制才能继续
 
     # 花言巧语封锁状态
     sweet_talk_blocked: Optional[Dict] = None  # {blocked_columns: [列号], from_qq: 施放者QQ}
+
+    # 道具效果状态
+    allow_reroll: bool = False  # 败者尘：允许重投
+    reroll_on_one: bool = False  # 沉重的巨剑：出1可重投
+    reroll_on_six: bool = False  # 女巫魔法伎俩：出6可重投
+    all_dice_modifier: int = 0  # 变大蘑菇/缩小药水：骰子结果修正值
+    forced_rolls: Optional[List[int]] = None  # 超级大炮：固定出目
+    partial_forced_rolls: Optional[List[int]] = None  # 闹Ae魔镜：部分固定出目
+    allow_retry_on_fail: bool = False  # 阈限空间：失败可重试
+    next_purchase_half: bool = False  # 购物卡：下次购买半价
+    cost_reduction: int = 0  # 黑喵：永久回合消耗减少
+    last_used_item_id: Optional[int] = None  # 上次使用的道具ID（火堆用）
+
+    # 遭遇效果状态
+    immune_next_trap: bool = False  # 免疫下一个陷阱
+    free_rounds: int = 0  # 免费回合数
+    next_roll_double_cost: bool = False  # 下次投骰双倍消耗
+    change_one_dice_available: bool = False  # 可更改一个骰子点数
+    use_last_dice_available: bool = False  # 可使用上轮骰子结果
+    frozen_columns: List[int] = field(default_factory=list)  # 被冻结的列
+
+    # 新增遭遇效果状态
+    must_draw_double: bool = False  # 葡萄蔷薇紫苑：下次打卡需双倍
+    force_end_until_draw: bool = False  # 葡萄蔷薇紫苑：强制暂停直到打卡
+    next_dice_modify_any: bool = False  # 面具（Ae）：任意修改一个骰子
+    next_dice_add_3_any: bool = False  # 面具（收养人）：任意骰子+3
+    disabled_columns_this_round: List[int] = field(default_factory=list)  # 本轮禁用的列
 
     def to_dict(self) -> dict:
         """转换为字典（用于存储）"""
@@ -104,7 +133,30 @@ class PlayerGameState:
             'pending_trap_choice': json.dumps(self.pending_trap_choice) if self.pending_trap_choice else None,
             'trap_immunity_cost': self.trap_immunity_cost,
             'trap_immunity_draw': int(self.trap_immunity_draw),
-            'sweet_talk_blocked': json.dumps(self.sweet_talk_blocked) if self.sweet_talk_blocked else None
+            'trap_immunity_count': self.trap_immunity_count,
+            'requires_drawing': int(self.requires_drawing),
+            'sweet_talk_blocked': json.dumps(self.sweet_talk_blocked) if self.sweet_talk_blocked else None,
+            'allow_reroll': int(self.allow_reroll),
+            'reroll_on_one': int(self.reroll_on_one),
+            'reroll_on_six': int(self.reroll_on_six),
+            'all_dice_modifier': self.all_dice_modifier,
+            'forced_rolls': json.dumps(self.forced_rolls) if self.forced_rolls else None,
+            'partial_forced_rolls': json.dumps(self.partial_forced_rolls) if self.partial_forced_rolls else None,
+            'allow_retry_on_fail': int(self.allow_retry_on_fail),
+            'next_purchase_half': int(self.next_purchase_half),
+            'cost_reduction': self.cost_reduction,
+            'last_used_item_id': self.last_used_item_id,
+            'immune_next_trap': int(self.immune_next_trap),
+            'free_rounds': self.free_rounds,
+            'next_roll_double_cost': int(self.next_roll_double_cost),
+            'change_one_dice_available': int(self.change_one_dice_available),
+            'use_last_dice_available': int(self.use_last_dice_available),
+            'frozen_columns': json.dumps(self.frozen_columns),
+            'must_draw_double': int(self.must_draw_double),
+            'force_end_until_draw': int(self.force_end_until_draw),
+            'next_dice_modify_any': int(self.next_dice_modify_any),
+            'next_dice_add_3_any': int(self.next_dice_add_3_any),
+            'disabled_columns_this_round': json.dumps(self.disabled_columns_this_round)
         }
 
     @staticmethod
@@ -138,6 +190,18 @@ class PlayerGameState:
         sweet_talk_blocked_raw = data.get('sweet_talk_blocked')
         sweet_talk_blocked = json.loads(sweet_talk_blocked_raw) if sweet_talk_blocked_raw else None
 
+        forced_rolls_raw = data.get('forced_rolls')
+        forced_rolls = json.loads(forced_rolls_raw) if forced_rolls_raw else None
+
+        partial_forced_rolls_raw = data.get('partial_forced_rolls')
+        partial_forced_rolls = json.loads(partial_forced_rolls_raw) if partial_forced_rolls_raw else None
+
+        frozen_columns_raw = data.get('frozen_columns')
+        frozen_columns = json.loads(frozen_columns_raw) if frozen_columns_raw else []
+
+        disabled_columns_this_round_raw = data.get('disabled_columns_this_round')
+        disabled_columns_this_round = json.loads(disabled_columns_this_round_raw) if disabled_columns_this_round_raw else []
+
         return PlayerGameState(
             qq_id=qq_id,
             current_round_active=bool(data.get('current_round_active', 0)),
@@ -160,7 +224,30 @@ class PlayerGameState:
             pending_trap_choice=pending_trap_choice,
             trap_immunity_cost=data.get('trap_immunity_cost'),
             trap_immunity_draw=bool(data.get('trap_immunity_draw', 0)),
-            sweet_talk_blocked=sweet_talk_blocked
+            trap_immunity_count=data.get('trap_immunity_count', 0),
+            requires_drawing=bool(data.get('requires_drawing', 0)),
+            sweet_talk_blocked=sweet_talk_blocked,
+            allow_reroll=bool(data.get('allow_reroll', 0)),
+            reroll_on_one=bool(data.get('reroll_on_one', 0)),
+            reroll_on_six=bool(data.get('reroll_on_six', 0)),
+            all_dice_modifier=data.get('all_dice_modifier', 0),
+            forced_rolls=forced_rolls,
+            partial_forced_rolls=partial_forced_rolls,
+            allow_retry_on_fail=bool(data.get('allow_retry_on_fail', 0)),
+            next_purchase_half=bool(data.get('next_purchase_half', 0)),
+            cost_reduction=data.get('cost_reduction', 0),
+            last_used_item_id=data.get('last_used_item_id'),
+            immune_next_trap=bool(data.get('immune_next_trap', 0)),
+            free_rounds=data.get('free_rounds', 0),
+            next_roll_double_cost=bool(data.get('next_roll_double_cost', 0)),
+            change_one_dice_available=bool(data.get('change_one_dice_available', 0)),
+            use_last_dice_available=bool(data.get('use_last_dice_available', 0)),
+            frozen_columns=frozen_columns,
+            must_draw_double=bool(data.get('must_draw_double', 0)),
+            force_end_until_draw=bool(data.get('force_end_until_draw', 0)),
+            next_dice_modify_any=bool(data.get('next_dice_modify_any', 0)),
+            next_dice_add_3_any=bool(data.get('next_dice_add_3_any', 0)),
+            disabled_columns_this_round=disabled_columns_this_round
         )
 
 
