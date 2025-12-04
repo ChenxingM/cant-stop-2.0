@@ -236,7 +236,20 @@ class GameEngine:
             return GameResult(False, f"积分不足，需要{cost}积分")
 
         # 确定骰子数量（可能被陷阱效果修改）
-        if state.next_dice_count:
+        dice_groups = None  # 默认为 None，让 _get_possible_sums 自动决定分组
+
+        # 优先检查当前回合强制骰子数量（LUCKY DAY等）
+        if state.current_dice_count:
+            required_count = state.current_dice_count
+            if dice_count != required_count:
+                return GameResult(False, f"⚠️ 当前回合必须投掷 {required_count} 个骰子（.r{required_count}d6）")
+            dice_count = state.current_dice_count
+            dice_groups = state.current_dice_groups
+            # 清除效果（使用后清除）
+            state.current_dice_count = None
+            state.current_dice_groups = None
+            self.state_dao.update_state(state)
+        elif state.next_dice_count:
             dice_count = state.next_dice_count
             dice_groups = state.next_dice_groups
             # 清除效果
@@ -493,12 +506,24 @@ class GameEngine:
             self._check_dice_achievements(qq_id, results)
 
             # 计算可能的组合
-            possible_sums = self._get_possible_sums(results)
+            possible_sums = self._get_possible_sums(results, dice_groups)
 
             # 格式化可能的组合提示
-            combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)])
+            if possible_sums:
+                combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)])
+            else:
+                combinations_str = "无有效组合"
 
             message = f"🎲投掷结果: {' '.join(map(str, results))}\n可能的组合: {combinations_str}"
+
+            # 如果没有有效组合，检查是否有修改骰子的能力
+            if not possible_sums:
+                if state.next_dice_modify_any:
+                    message += "\n\n💡 您有「修改骰子」的能力！可以修改一个骰子的数值。\n使用指令：修改骰子 位置 新值（例如：修改骰子 1 5）"
+                elif state.change_one_dice_available:
+                    message += "\n\n💡 您有「修改骰子」的能力！可以修改一个骰子的数值。\n使用指令：修改骰子 位置 新值（例如：修改骰子 1 5）"
+                elif state.next_dice_add_3_any:
+                    message += "\n\n💡 您有「骰子+3」的能力！可以让任意一个骰子的结果+3。\n使用指令：骰子加三 位置（例如：骰子加三 1）"
 
             return GameResult(True, message, {
                 "results": results,
@@ -556,17 +581,38 @@ class GameEngine:
             "possible_sums": possible_sums
         })
 
-    def _get_possible_sums(self, dice_results: List[int]) -> List[Tuple[int, int]]:
-        """计算所有可能的两组和"""
+    def _get_possible_sums(self, dice_results: List[int], groups: List[int] = None) -> List[Tuple[int, int]]:
+        """计算所有可能的两组和
+
+        Args:
+            dice_results: 骰子结果列表
+            groups: 分组方式，如 [3, 3] 表示两组各3个，[2, 2] 表示两组各2个
+                    如果为 None，默认按骰子数量对半分
+        """
         from itertools import combinations
 
-        if len(dice_results) != 6:
-            return []
+        n = len(dice_results)
+
+        # 确定分组方式
+        if groups is None:
+            if n == 6:
+                groups = [3, 3]
+            elif n == 4:
+                groups = [2, 2]
+            elif n == 7:
+                groups = [3, 4]
+            elif n == 10:
+                groups = [5, 5]
+            else:
+                # 默认对半分
+                groups = [n // 2, n - n // 2]
+
+        group1_size = groups[0]
 
         possible_sums = set()
-        for indices in combinations(range(6), 3):
+        for indices in combinations(range(n), group1_size):
             group1 = [dice_results[i] for i in indices]
-            group2 = [dice_results[i] for i in range(6) if i not in indices]
+            group2 = [dice_results[i] for i in range(n) if i not in indices]
             sum1, sum2 = sum(group1), sum(group2)
             possible_sums.add(tuple(sorted([sum1, sum2])))
 
@@ -597,6 +643,26 @@ class GameEngine:
         # 检查是否投过骰子
         if not state.last_dice_result:
             return GameResult(False, "⚠️ 请先投掷骰子！\n使用指令：.r6d6")
+
+        # 检查黄玫瑰效果：被标记的玩家必须重新投掷
+        if state.force_reroll_next_move:
+            import random
+            # 强制重新投掷骰子
+            new_dice = [random.randint(1, 6) for _ in range(6)]
+            state.last_dice_result = new_dice
+            state.force_reroll_next_move = False
+            self.state_dao.update_state(state)
+
+            new_possible_sums = self._get_possible_sums(new_dice)
+            sums_str = ', '.join([f"({s[0]}, {s[1]})" for s in sorted(new_possible_sums)])
+
+            return GameResult(False,
+                f"🌹 黄玫瑰效果触发！\n"
+                f"虚假的花瓣扰乱了你的骰子...\n\n"
+                f"你的骰子被强制重新投掷！\n"
+                f"新骰子结果：{new_dice}\n"
+                f"可选数值组合：{sums_str}\n\n"
+                f"请使用新的骰子结果重新记录数值")
 
         # 验证数值是否可以由骰子结果组成
         possible_sums = self._get_possible_sums(state.last_dice_result)
@@ -833,7 +899,12 @@ class GameEngine:
         # 更新状态
         state.current_round_active = False
         state.can_start_new_round = False  # 需要打卡后才能开启新轮次
-        state.sweet_talk_blocked = None  # 清除花言巧语封锁
+        # 花言巧语封锁：如果已在本轮生效过则清除，否则标记为已生效
+        if state.sweet_talk_blocked:
+            if state.sweet_talk_blocked.get('applied'):
+                state.sweet_talk_blocked = None
+            else:
+                state.sweet_talk_blocked['applied'] = True
         state.disabled_columns_this_round = []  # 清空本轮禁用列
         self.state_dao.update_state(state)
 
@@ -873,13 +944,44 @@ class GameEngine:
                 "您获得了一次重试的机会！\n"
                 "本次进度回退已被取消，您可以继续投掷骰子。")
 
+        # 检查红玫瑰效果（失败可重试）
+        if state.has_red_rose:
+            state.has_red_rose = False
+            state.last_dice_result = None
+            self.state_dao.update_state(state)
+            return GameResult(True,
+                "🌹 红玫瑰效果触发！\n"
+                "娇艳的花瓣化为力量守护着你...\n"
+                "本次进度回退已被取消，您可以继续投掷骰子。")
+
+        # 检查蓝玫瑰效果（来自Ae的保护）
+        if state.has_blue_rose_from:
+            from_qq = state.has_blue_rose_from
+            state.has_blue_rose_from = None
+            state.last_dice_result = None
+            self.state_dao.update_state(state)
+
+            # 获取帮助者信息
+            helper = self.player_dao.get_player(from_qq)
+            helper_name = helper.nickname if helper else from_qq
+
+            return GameResult(True,
+                f"🌹 蓝玫瑰效果触发！\n"
+                f"来自 {helper_name} 的蓝玫瑰守护了你...\n"
+                f"本次进度回退已被取消，您可以继续投掷骰子。")
+
         # 清除所有临时标记
         self.position_dao.clear_temp_positions(qq_id)
 
         # 更新状态
         state.current_round_active = False
         state.temp_markers_used = 0
-        state.sweet_talk_blocked = None  # 清除花言巧语封锁
+        # 花言巧语封锁：如果已在本轮生效过则清除，否则标记为已生效
+        if state.sweet_talk_blocked:
+            if state.sweet_talk_blocked.get('applied'):
+                state.sweet_talk_blocked = None
+            else:
+                state.sweet_talk_blocked['applied'] = True
         state.disabled_columns_this_round = []  # 清空本轮禁用列
         self.state_dao.update_state(state)
 
@@ -1037,9 +1139,16 @@ class GameEngine:
 
             first_reward = 20
             self.player_dao.add_score(qq_id, first_reward)
-            self.achievement_dao.add_achievement(qq_id, column, f"第{column}列首达", "first_clear")
+            self.achievement_dao.add_achievement(qq_id, column, "鹤立oas群", "first_clear")
 
-            message += f"\n✦首达奖励\n恭喜您在该列首次登顶，获得 {first_reward} 积分"
+            message += (
+                f"\n\n🍗 大吉大利，今晚吃鸡\n"
+                f"肥美的烤鸡扑扇着翅膀飞到了你面前的盘子里，诱人的香气让你迫不及待地切开金黄外皮…不对，等一下？！\n\n"
+                f"✦列全体首达奖励\n"
+                f"获得成就：鹤立oas群\n"
+                f"获得奖励：积分+{first_reward}\n"
+                f"获得现实奖励：纪念币一枚（私信官号领取，不包邮）"
+            )
 
             # 首达后禁止新轮次12小时
             from datetime import datetime, timedelta
@@ -1291,6 +1400,175 @@ class GameEngine:
             return GameResult(True, f"💔 您与 {partner_name}({partner_qq}) 的契约已解除")
         else:
             return GameResult(False, "❌ 解除契约失败")
+
+    # ==================== 对决系统 ====================
+
+    def start_duel(self, qq_id: str, target_qq: str) -> GameResult:
+        """发起对决（中门对狙陷阱）
+
+        Args:
+            qq_id: 发起对决的玩家QQ号
+            target_qq: 被挑战的玩家QQ号
+        """
+        import random
+
+        state = self.state_dao.get_state(qq_id)
+
+        # 检查是否有待处理的对决选择
+        if not state.pending_trap_choice:
+            return GameResult(False, "❌ 当前没有等待的对决陷阱")
+
+        trap_info = state.pending_trap_choice
+        extra_data = trap_info.get('extra_data', {})
+        # awaiting_duel_target 可能在 trap_info 或 extra_data 中
+        awaiting_duel = trap_info.get('awaiting_duel_target') or extra_data.get('awaiting_duel_target')
+        if trap_info.get('trap_type') != 'duel' or not awaiting_duel:
+            return GameResult(False, "❌ 当前没有等待的对决陷阱")
+
+        # 检查不能和自己对决
+        if target_qq == qq_id:
+            return GameResult(False, "❌ 不能和自己对决！请选择其他玩家")
+
+        # 检查目标玩家是否存在
+        target_player = self.player_dao.get_player(target_qq)
+        if not target_player:
+            return GameResult(False, f"❌ 玩家 {target_qq} 不存在")
+
+        # 发起者先投骰
+        challenger_roll = random.randint(1, 6)
+
+        # 保存对决状态到发起者的 pending_duel
+        # column 可能在 trap_info 或 extra_data 中
+        column = trap_info.get('column') or extra_data.get('column')
+        state.pending_duel = {
+            'challenger_qq': qq_id,
+            'challenger_roll': challenger_roll,
+            'target_qq': target_qq,
+            'column': column
+        }
+        # 清除陷阱选择状态
+        state.pending_trap_choice = None
+        self.state_dao.update_state(state)
+
+        # 同时在目标玩家的状态中记录待应战
+        target_state = self.state_dao.get_state(target_qq)
+        target_state.pending_duel = {
+            'challenger_qq': qq_id,
+            'challenger_roll': challenger_roll,
+            'target_qq': target_qq,
+            'awaiting_response': True
+        }
+        self.state_dao.update_state(target_state)
+
+        player = self.player_dao.get_player(qq_id)
+        player_name = player.nickname if player else qq_id
+        target_name = target_player.nickname if target_player else target_qq
+
+        return GameResult(True,
+            f"⚔️ 中门对狙！\n\n"
+            f"🎯 {player_name} 向 {target_name}({target_qq}) 发起对决！\n"
+            f"🎲 {player_name} 投出了：{challenger_roll}\n\n"
+            f"📢 {target_name}，请输入【应战】来接受对决！\n"
+            f"（投出 .r1d6 进行对决）")
+
+    def respond_duel(self, qq_id: str) -> GameResult:
+        """响应对决
+
+        Args:
+            qq_id: 被挑战的玩家QQ号
+        """
+        import random
+
+        state = self.state_dao.get_state(qq_id)
+
+        # 检查是否有待响应的对决
+        if not state.pending_duel or not state.pending_duel.get('awaiting_response'):
+            return GameResult(False, "❌ 当前没有待响应的对决")
+
+        duel_info = state.pending_duel
+        challenger_qq = duel_info.get('challenger_qq')
+        challenger_roll = duel_info.get('challenger_roll')
+
+        # 响应者投骰
+        responder_roll = random.randint(1, 6)
+
+        # 获取玩家名称
+        challenger = self.player_dao.get_player(challenger_qq)
+        responder = self.player_dao.get_player(qq_id)
+        challenger_name = challenger.nickname if challenger else challenger_qq
+        responder_name = responder.nickname if responder else qq_id
+
+        result_msg = (f"⚔️ 中门对狙结果！\n\n"
+                     f"🎲 {challenger_name} 投出了：{challenger_roll}\n"
+                     f"🎲 {responder_name} 投出了：{responder_roll}\n\n")
+
+        # 判定胜负
+        if challenger_roll > responder_roll:
+            # 发起者胜利
+            self.player_dao.add_score(challenger_qq, 5)
+            challenger_state = self.state_dao.get_state(challenger_qq)
+            challenger_state.pending_duel = None
+            self.state_dao.update_state(challenger_state)
+
+            # 响应者失败，停止一回合
+            state.skipped_rounds += 1
+            state.pending_duel = None
+            self.state_dao.update_state(state)
+
+            result_msg += (f"🏆 {challenger_name} 获胜！+5积分\n"
+                          f"💀 {responder_name} 失败，停止一回合")
+            print(f"[对决] {challenger_qq} vs {qq_id}: 发起者胜利")
+
+        elif challenger_roll < responder_roll:
+            # 响应者胜利
+            self.player_dao.add_score(qq_id, 5)
+            state.pending_duel = None
+            self.state_dao.update_state(state)
+
+            # 发起者失败，停止一回合
+            challenger_state = self.state_dao.get_state(challenger_qq)
+            challenger_state.skipped_rounds += 1
+            challenger_state.pending_duel = None
+            self.state_dao.update_state(challenger_state)
+
+            result_msg += (f"🏆 {responder_name} 获胜！+5积分\n"
+                          f"💀 {challenger_name} 失败，停止一回合")
+            print(f"[对决] {challenger_qq} vs {qq_id}: 响应者胜利")
+
+        else:
+            # 平局
+            state.pending_duel = None
+            self.state_dao.update_state(state)
+
+            challenger_state = self.state_dao.get_state(challenger_qq)
+            challenger_state.pending_duel = None
+            self.state_dao.update_state(challenger_state)
+
+            result_msg += "🤝 平局！无事发生"
+            print(f"[对决] {challenger_qq} vs {qq_id}: 平局")
+
+        return GameResult(True, result_msg)
+
+    def thanks_fortune(self, qq_id: str) -> GameResult:
+        """玩家回复"谢谢财神"获得额外奖励
+
+        Args:
+            qq_id: 玩家QQ号
+        """
+        state = self.state_dao.get_state(qq_id)
+
+        # 检查是否有待触发的财神福利
+        if state.pending_bonus_trigger != 'thanks_fortune':
+            return GameResult(False, "❌ 当前没有可以回复的财神福利")
+
+        # 给予免费掷骰券
+        self.inventory_dao.add_item(qq_id, 9103, "免费掷骰券", "hidden_item")
+
+        # 清除触发状态
+        state.pending_bonus_trigger = None
+        self.state_dao.update_state(state)
+
+        return GameResult(True, "\"真是有礼貌的孩子！\" 财神额外给了你一张免费掷骰券 🎟️")
 
     # ==================== 特殊效果使用 ====================
 
@@ -1992,25 +2270,28 @@ class GameEngine:
         if 'teleport_to' in effects and 'column' in effects:
             target_column = effects['teleport_to']
             source_column = effects['column']
-            # 清除原列的临时标记
-            self.position_dao.clear_temp_position_by_column(qq_id, source_column)
-            # 在目标列设置标记
+
+            # 检查目标列是否有永久标记
             permanent_pos = next((p for p in self.position_dao.get_positions(qq_id, 'permanent')
                                 if p.column_number == target_column), None)
-            if permanent_pos:
-                # 有永久标记，放在永久标记+1位置
+            # 检查目标列是否已有临时标记
+            temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+            has_temp = any(p.column_number == target_column for p in temp_positions)
+
+            if permanent_pos and not has_temp:
+                # 有永久标记且无临时标记：传送成功
+                # 清除原列的临时标记
+                self.position_dao.clear_temp_position_by_column(qq_id, source_column)
+                # 放在永久标记+1位置
                 self.position_dao.add_or_update_position(qq_id, target_column, permanent_pos.position + 1, 'temp')
                 print(f"[效果应用] {qq_id} 传送到列{target_column}，位置{permanent_pos.position + 1}")
             else:
-                # 检查该列是否已有临时标记
-                temp_positions = self.position_dao.get_positions(qq_id, 'temp')
-                has_temp = any(p.column_number == target_column for p in temp_positions)
-                if not has_temp:
-                    # 没有标记，放在第1格
-                    self.position_dao.add_or_update_position(qq_id, target_column, 1, 'temp')
-                    print(f"[效果应用] {qq_id} 传送到列{target_column}，位置1")
+                # 无永久棋子或已有临时标记：本轮次作废，清除所有临时标记
+                self.position_dao.clear_temp_positions(qq_id)
+                if not permanent_pos:
+                    print(f"[效果应用] {qq_id} 传送失败，目标列{target_column}无永久标记，本轮作废")
                 else:
-                    print(f"[效果应用] {qq_id} 传送失败，目标列{target_column}已有临时标记")
+                    print(f"[效果应用] {qq_id} 传送失败，目标列{target_column}已有临时标记，本轮作废")
 
         # ==================== 骰子相关效果 ====================
 
@@ -2024,12 +2305,19 @@ class GameEngine:
             state.next_dice_fixed = effects['next_dice_fixed']
             print(f"[效果应用] {qq_id} 下回合骰子结果固定为 {state.next_dice_fixed}")
 
-        # 处理骰子数量改变效果（LUCKY DAY）
+        # 处理骰子数量改变效果（下回合生效）
         if 'next_dice_count' in effects:
             state.next_dice_count = effects['next_dice_count']
             if 'next_dice_groups' in effects:
                 state.next_dice_groups = effects['next_dice_groups']
             print(f"[效果应用] {qq_id} 下回合只投掷 {state.next_dice_count} 个骰子")
+
+        # 处理当前回合骰子数量改变效果（LUCKY DAY - 立即生效）
+        if 'current_dice_count' in effects:
+            state.current_dice_count = effects['current_dice_count']
+            if 'current_dice_groups' in effects:
+                state.current_dice_groups = effects['current_dice_groups']
+            print(f"[效果应用] {qq_id} 本回合只能投掷 {state.current_dice_count} 个骰子")
 
         # 处理奇偶检定效果
         if effects.get('odd_even_check'):
@@ -2159,6 +2447,35 @@ class GameEngine:
             state.cost_reduction += effects['permanent_cost_reduction']
             print(f"[效果应用] {qq_id} 永久回合消耗减少{effects['permanent_cost_reduction']}，当前总减少: {state.cost_reduction}")
 
+        # ==================== 玫瑰道具效果 ====================
+
+        # 红玫瑰效果：失败可重试（类似阈限空间但有积分消耗）
+        if effects.get('red_rose_active'):
+            state.has_red_rose = True
+            print(f"[效果应用] {qq_id} 激活红玫瑰效果")
+
+        # 蓝玫瑰效果：给自己
+        if effects.get('blue_rose_self'):
+            state.has_red_rose = True  # 蓝玫瑰对自己使用时效果同红玫瑰
+            print(f"[效果应用] {qq_id} 蓝玫瑰效果（对自己）")
+
+        # 蓝玫瑰效果：给契约对象
+        if 'blue_rose_target' in effects:
+            target_qq = effects['blue_rose_target']
+            from_qq = effects.get('blue_rose_from', qq_id)
+            target_state = self.state_dao.get_state(target_qq)
+            target_state.has_blue_rose_from = from_qq
+            self.state_dao.update_state(target_state)
+            print(f"[效果应用] {target_qq} 收到来自 {from_qq} 的蓝玫瑰保护")
+
+        # 黄玫瑰效果：标记目标玩家
+        if 'yellow_rose_target' in effects:
+            target_qq = effects['yellow_rose_target']
+            target_state = self.state_dao.get_state(target_qq)
+            target_state.force_reroll_next_move = True
+            self.state_dao.update_state(target_state)
+            print(f"[效果应用] {target_qq} 被黄玫瑰标记，下次移动必须重投")
+
         # 五彩宝石效果：随机一半玩家扣积分
         if 'random_half_minus' in effects:
             self._apply_random_half_minus(qq_id, effects['random_half_minus'])
@@ -2174,13 +2491,21 @@ class GameEngine:
 
         # ==================== 遭遇效果 ====================
 
-        # 临时标记前进效果（你真好！）
+        # 临时标记前进效果（你真好！/蟑螂骑乘等）
         if 'move_temp_forward' in effects:
             move_count = effects['move_temp_forward']
             column = effects.get('column')
             if column:
                 self._move_temp_forward(qq_id, column, move_count)
                 print(f"[效果应用] {qq_id} 在列{column}临时标记前进{move_count}格")
+            else:
+                # 没有指定列时，移动所有临时标记
+                temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+                for pos in temp_positions:
+                    self._move_temp_forward(qq_id, pos.column_number, move_count)
+                if temp_positions:
+                    cols = [str(p.column_number) for p in temp_positions]
+                    print(f"[效果应用] {qq_id} 在列{','.join(cols)}的临时标记各前进{move_count}格")
 
         # 临时标记回退效果
         if 'temp_retreat' in effects:
@@ -2189,6 +2514,14 @@ class GameEngine:
             if column:
                 self._retreat_position(qq_id, column, retreat_count)
                 print(f"[效果应用] {qq_id} 在列{column}临时标记回退{retreat_count}格")
+            else:
+                # 没有指定列时，移动所有临时标记
+                temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+                for pos in temp_positions:
+                    self._retreat_position(qq_id, pos.column_number, retreat_count)
+                if temp_positions:
+                    cols = [str(p.column_number) for p in temp_positions]
+                    print(f"[效果应用] {qq_id} 在列{','.join(cols)}的临时标记各回退{retreat_count}格")
 
         # 免疫下一个陷阱效果
         if effects.get('immune_next_trap'):
@@ -2198,10 +2531,13 @@ class GameEngine:
         # 强制结束回合效果
         if effects.get('force_end_turn'):
             state.current_round_active = False
-            # 清空临时标记
+            # 把临时标记转换为永久标记
+            temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+            for temp_pos in temp_positions:
+                self.position_dao.set_position(qq_id, temp_pos.column_number, temp_pos.position, 'permanent')
             self.position_dao.clear_temp_positions(qq_id)
             state.temp_markers_used = 0
-            print(f"[效果应用] {qq_id} 被强制结束回合")
+            print(f"[效果应用] {qq_id} 被强制结束回合（临时标记已转为永久）")
 
         # 冥府里拉琴效果：移动自己的临时标记
         if 'move_temp' in effects:
@@ -2211,7 +2547,7 @@ class GameEngine:
 
         # 冥府里拉琴效果：移动契约对象的临时标记
         if 'move_partner_temp' in effects:
-            partner_qq = effects.get('partner_qq')
+            partner_qq = effects.get('contract_partner')  # content_handler返回的键名是contract_partner
             if partner_qq:
                 column, move_count = effects['move_partner_temp']
                 self._move_temp_forward(partner_qq, column, move_count)
@@ -2285,6 +2621,11 @@ class GameEngine:
         if effects.get('next_dice_add_3_any'):
             state.next_dice_add_3_any = True
             print(f"[效果应用] {qq_id} 下回合可任意骰子+3")
+
+        # 特殊触发效果（财神福利等）
+        if 'bonus_trigger' in effects:
+            state.pending_bonus_trigger = effects['bonus_trigger']
+            print(f"[效果应用] {qq_id} 可触发特殊奖励: {state.pending_bonus_trigger}")
 
         # 保存状态
         self.state_dao.update_state(state)
@@ -2362,7 +2703,7 @@ class GameEngine:
             return
 
         # 计算新位置
-        new_position = max(1, temp_pos.position - retreat_count)
+        new_position = temp_pos.position - retreat_count
 
         # 检查是否有永久标记
         permanent_positions = self.position_dao.get_positions(qq_id, 'permanent')
@@ -2372,9 +2713,15 @@ class GameEngine:
             # 如果回退后的位置<=永久标记位置，则临时标记应该在永久标记+1的位置
             if new_position <= permanent_pos.position:
                 new_position = permanent_pos.position + 1
+                self.position_dao.add_or_update_position(qq_id, column, new_position, 'temp')
+                return
 
-        # 更新位置
-        self.position_dao.add_or_update_position(qq_id, column, new_position, 'temp')
+        # 如果回退后位置<=0，移除临时标记
+        if new_position <= 0:
+            self.position_dao.clear_temp_position_by_column(qq_id, column)
+            print(f"[回退] {qq_id} 在列{column}的临时标记被移除（回退到起点以下）")
+        else:
+            self.position_dao.add_or_update_position(qq_id, column, new_position, 'temp')
 
     def _apply_hammer_effect(self, user_qq: str, column: int, position: int):
         """应用揍击派对效果 - 锤击指定位置所有玩家的标记（包括自己）
@@ -2406,10 +2753,21 @@ class GameEngine:
             for pos in perm_positions:
                 if pos.column_number == column and pos.position == position:
                     # 永久标记回退1格
-                    new_pos = max(1, pos.position - 1)
-                    self.position_dao.add_or_update_position(player.qq_id, column, new_pos, 'permanent')
-                    affected_players.append(f"{player.nickname}(永久)")
-                    logging.info(f"[揍击派对] {player.nickname} 的永久标记在 ({column},{position}) 被锤退1格")
+                    new_pos = pos.position - 1
+                    if new_pos <= 0:
+                        # 位置<=0时移除永久标记
+                        cursor = self.db_conn.cursor()
+                        cursor.execute(
+                            "DELETE FROM player_positions WHERE qq_id = ? AND column_number = ? AND marker_type = 'permanent'",
+                            (player.qq_id, column)
+                        )
+                        self.db_conn.commit()
+                        affected_players.append(f"{player.nickname}(永久-移除)")
+                        logging.info(f"[揍击派对] {player.nickname} 的永久标记在 ({column},{position}) 被移除")
+                    else:
+                        self.position_dao.add_or_update_position(player.qq_id, column, new_pos, 'permanent')
+                        affected_players.append(f"{player.nickname}(永久)")
+                        logging.info(f"[揍击派对] {player.nickname} 的永久标记在 ({column},{position}) 被锤退1格")
                     break
 
         if affected_players:
@@ -2474,9 +2832,16 @@ class GameEngine:
 
             first_reward = 20
             self.player_dao.add_score(qq_id, first_reward)
-            self.achievement_dao.add_achievement(qq_id, column, f"第{column}列首达", "first_clear")
+            self.achievement_dao.add_achievement(qq_id, column, "鹤立oas群", "first_clear")
 
-            message += f"\n✦首达奖励\n恭喜您在该列首次登顶，获得 {first_reward} 积分"
+            message += (
+                f"\n\n🍗 大吉大利，今晚吃鸡\n"
+                f"肥美的烤鸡扑扇着翅膀飞到了你面前的盘子里，诱人的香气让你迫不及待地切开金黄外皮…不对，等一下？！\n\n"
+                f"✦列全体首达奖励\n"
+                f"获得成就：鹤立oas群\n"
+                f"获得奖励：积分+{first_reward}\n"
+                f"获得现实奖励：纪念币一枚（私信官号领取，不包邮）"
+            )
 
             # 6. 首达后禁止新轮次12小时
             state = self.state_dao.get_state(qq_id)
@@ -2502,6 +2867,26 @@ class GameEngine:
         row = cursor.fetchone()
         rank = row['count'] + 1
 
+        extra_messages = []
+
+        # 检查契约金婚成就
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+        partner_qq = contract_dao.get_contract_partner(qq_id)
+
+        if partner_qq:
+            # 检查契约对象是否也通关了
+            cursor.execute('SELECT COUNT(*) as count FROM game_rankings WHERE qq_id = ?', (partner_qq,))
+            partner_finished = cursor.fetchone()['count'] > 0
+
+            if partner_finished:
+                # 双方都通关，发放"产品金婚"成就
+                self.achievement_dao.add_achievement(qq_id, 9901, "产品金婚", "hidden")
+                self.achievement_dao.add_achievement(partner_qq, 9901, "产品金婚", "hidden")
+                partner = self.player_dao.get_player(partner_qq)
+                partner_name = partner.nickname if partner else partner_qq
+                extra_messages.append(f"💍 您与契约对象 {partner_name} 共同通关！获得隐藏成就：产品金婚")
+
         if rank <= 4:
             # 记录排名
             cursor.execute('INSERT INTO game_rankings (rank, qq_id) VALUES (?, ?)', (rank, qq_id))
@@ -2516,9 +2901,52 @@ class GameEngine:
             rank_names = {1: "OAS游戏王", 2: "银闪闪", 3: "吉祥三宝", 4: "一步之遥"}
             self.achievement_dao.add_achievement(qq_id, rank, rank_names[rank], "first_clear")
 
-            return GameResult(True, f"🎉🎉🎉 恭喜您第{rank}个通关游戏！🎉🎉🎉\n获得成就：{rank_names[rank]}\n奖励积分：{reward}")
+            # 根据排名生成不同的通关文案
+            if rank == 1:
+                result_msg = (
+                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+                    "★✦恭喜您第一通关游戏✦★\n"
+                    f"获得成就：{rank_names[rank]}\n"
+                    f"获得奖励：积分+{reward}\n"
+                    "获得现实奖励：丑喵团子一只 纪念币一枚（私信官号领取，不包邮）"
+                )
+            elif rank == 2:
+                result_msg = (
+                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+                    "★✦恭喜您第二通关游戏✦★\n"
+                    f"获得成就：{rank_names[rank]}\n"
+                    f"获得奖励：积分+{reward}\n"
+                    "获得现实奖励：丑喵团子一只 纪念币一枚（私信官号领取，不包邮）"
+                )
+            elif rank == 3:
+                result_msg = (
+                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+                    "★✦恭喜您第三通关游戏✦★\n"
+                    f"获得成就：{rank_names[rank]}\n"
+                    f"获得奖励：积分+{reward}\n"
+                    "获得现实奖励：丑喵团子一只 纪念币一枚（私信官号领取，不包邮）"
+                )
+            else:  # rank == 4
+                result_msg = (
+                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+                    "★✦恭喜您第四通关游戏✦★\n"
+                    f"获得成就：{rank_names[rank]}\n"
+                    "获得奖励：没有捏～～～"
+                )
 
-        return GameResult(True, "🎉 恭喜您通关游戏！")
+            if extra_messages:
+                result_msg += "\n\n" + "\n".join(extra_messages)
+            return GameResult(True, result_msg)
+
+        # 第5名及之后
+        result_msg = (
+            "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+            f"★✦恭喜您第{rank}个通关游戏✦★\n"
+            "虽然没有排名奖励，但您成功通关了游戏！"
+        )
+        if extra_messages:
+            result_msg += "\n\n" + "\n".join(extra_messages)
+        return GameResult(True, result_msg)
 
     def _move_temp_forward(self, qq_id: str, column: int, move_count: int):
         """移动指定列的临时标记前进

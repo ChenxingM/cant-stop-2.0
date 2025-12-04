@@ -62,6 +62,10 @@ class CommandParser:
         # 陷阱选择
         'make_trap_choice': r'^陷阱选择[:：]?\s*(.+)$',
 
+        # 对决系统
+        'start_duel': r'^对决\s*@?(\d+)$',  # 对决@QQ号
+        'respond_duel': r'^应战$',  # 被@的玩家应战
+
         # 特殊功能
         'pet_cat': r'^摸摸喵$',
         'feed_cat': r'^投喂喵$',
@@ -71,6 +75,9 @@ class CommandParser:
         'bind_contract': r'^绑定契约对象\s*@?(\d+)$',
         'view_contract': r'^查看契约$',
         'remove_contract': r'^解除契约$',
+
+        # 特殊触发
+        'thanks_fortune': r'^谢谢财神$',
     }
 
     @classmethod
@@ -223,6 +230,9 @@ class CommandParser:
         elif cmd_type == 'bind_contract':
             params['target_qq'] = match.group(1).strip()
 
+        elif cmd_type == 'start_duel':
+            params['target_qq'] = match.group(1).strip()
+
         elif cmd_type == 'use_last_dice':
             params['dice_values'] = [int(match.group(1)), int(match.group(2)), int(match.group(3))]
 
@@ -341,6 +351,9 @@ COMMAND_HANDLERS = {
     'use_last_dice': 'use_last_dice',
     'change_dice': 'change_dice',
     'add_3_dice': 'add_3_dice',
+    'start_duel': 'start_duel',
+    'respond_duel': 'respond_duel',
+    'thanks_fortune': 'thanks_fortune',
 }
 
 

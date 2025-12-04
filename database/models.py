@@ -68,6 +68,8 @@ class PlayerGameState:
     next_dice_fixed: Optional[List[int]] = None  # 下回合固定骰子结果
     next_dice_count: Optional[int] = None  # 下回合骰子数量
     next_dice_groups: Optional[List[int]] = None  # 下回合骰子分组方式
+    current_dice_count: Optional[int] = None  # 当前回合骰子数量（立即生效）
+    current_dice_groups: Optional[List[int]] = None  # 当前回合骰子分组方式
     forced_remaining_rounds: int = 0  # 强制进行的剩余回合数
     odd_even_check_active: bool = False  # 奇偶检定激活
     math_check_active: bool = False  # 数学检定激活
@@ -110,6 +112,18 @@ class PlayerGameState:
     next_dice_add_3_any: bool = False  # 面具（收养人）：任意骰子+3
     disabled_columns_this_round: List[int] = field(default_factory=list)  # 本轮禁用的列
 
+    # 对决系统
+    pending_duel: Optional[dict] = None  # 等待对决响应 {challenger_qq, challenger_roll, target_qq}
+
+    # 特殊触发
+    pending_bonus_trigger: Optional[str] = None  # 等待的特殊触发（如 'thanks_fortune'）
+
+    # 玫瑰道具效果
+    has_red_rose: bool = False  # 红玫瑰：失败时可消耗10积分重试
+    has_blue_rose_from: Optional[str] = None  # 蓝玫瑰：来自哪个Ae的帮助（Ae的QQ号）
+    yellow_rose_target: Optional[str] = None  # 黄玫瑰：被标记为下次必须重投的玩家QQ
+    force_reroll_next_move: bool = False  # 黄玫瑰效果：下次移动必须重投
+
     def to_dict(self) -> dict:
         """转换为字典（用于存储）"""
         return {
@@ -126,6 +140,8 @@ class PlayerGameState:
             'next_dice_fixed': json.dumps(self.next_dice_fixed) if self.next_dice_fixed else None,
             'next_dice_count': self.next_dice_count,
             'next_dice_groups': json.dumps(self.next_dice_groups) if self.next_dice_groups else None,
+            'current_dice_count': self.current_dice_count,
+            'current_dice_groups': json.dumps(self.current_dice_groups) if self.current_dice_groups else None,
             'forced_remaining_rounds': self.forced_remaining_rounds,
             'odd_even_check_active': int(self.odd_even_check_active),
             'math_check_active': int(self.math_check_active),
@@ -156,7 +172,13 @@ class PlayerGameState:
             'force_end_until_draw': int(self.force_end_until_draw),
             'next_dice_modify_any': int(self.next_dice_modify_any),
             'next_dice_add_3_any': int(self.next_dice_add_3_any),
-            'disabled_columns_this_round': json.dumps(self.disabled_columns_this_round)
+            'disabled_columns_this_round': json.dumps(self.disabled_columns_this_round),
+            'pending_duel': json.dumps(self.pending_duel) if self.pending_duel else None,
+            'pending_bonus_trigger': self.pending_bonus_trigger,
+            'has_red_rose': int(self.has_red_rose),
+            'has_blue_rose_from': self.has_blue_rose_from,
+            'yellow_rose_target': self.yellow_rose_target,
+            'force_reroll_next_move': int(self.force_reroll_next_move)
         }
 
     @staticmethod
@@ -183,6 +205,9 @@ class PlayerGameState:
 
         next_dice_groups_raw = data.get('next_dice_groups')
         next_dice_groups = json.loads(next_dice_groups_raw) if next_dice_groups_raw else None
+
+        current_dice_groups_raw = data.get('current_dice_groups')
+        current_dice_groups = json.loads(current_dice_groups_raw) if current_dice_groups_raw else None
 
         pending_trap_choice_raw = data.get('pending_trap_choice')
         pending_trap_choice = json.loads(pending_trap_choice_raw) if pending_trap_choice_raw else None
@@ -217,6 +242,8 @@ class PlayerGameState:
             next_dice_fixed=next_dice_fixed,
             next_dice_count=data.get('next_dice_count'),
             next_dice_groups=next_dice_groups,
+            current_dice_count=data.get('current_dice_count'),
+            current_dice_groups=current_dice_groups,
             forced_remaining_rounds=data.get('forced_remaining_rounds', 0),
             odd_even_check_active=bool(data.get('odd_even_check_active', 0)),
             math_check_active=bool(data.get('math_check_active', 0)),
@@ -247,7 +274,13 @@ class PlayerGameState:
             force_end_until_draw=bool(data.get('force_end_until_draw', 0)),
             next_dice_modify_any=bool(data.get('next_dice_modify_any', 0)),
             next_dice_add_3_any=bool(data.get('next_dice_add_3_any', 0)),
-            disabled_columns_this_round=disabled_columns_this_round
+            disabled_columns_this_round=disabled_columns_this_round,
+            pending_duel=json.loads(data['pending_duel']) if data.get('pending_duel') else None,
+            pending_bonus_trigger=data.get('pending_bonus_trigger'),
+            has_red_rose=bool(data.get('has_red_rose', 0)),
+            has_blue_rose_from=data.get('has_blue_rose_from'),
+            yellow_rose_target=data.get('yellow_rose_target'),
+            force_reroll_next_move=bool(data.get('force_reroll_next_move', 0))
         )
 
 

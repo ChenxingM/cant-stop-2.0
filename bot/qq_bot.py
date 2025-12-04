@@ -220,15 +220,22 @@ class QQBot:
             await self.send_group_message(str(group_id), response, at_qq=user_id)
 
     def _extract_text(self, message) -> str:
-        """从消息中提取纯文本"""
+        """从消息中提取纯文本，将 at 消息段转换为 @QQ号 格式"""
         if isinstance(message, str):
             return message
 
         if isinstance(message, list):
             text_parts = []
             for msg_seg in message:
-                if isinstance(msg_seg, dict) and msg_seg.get('type') == 'text':
-                    text_parts.append(msg_seg.get('data', {}).get('text', ''))
+                if isinstance(msg_seg, dict):
+                    msg_type = msg_seg.get('type')
+                    if msg_type == 'text':
+                        text_parts.append(msg_seg.get('data', {}).get('text', ''))
+                    elif msg_type == 'at':
+                        # 将 at 消息段转换为 @QQ号 格式
+                        qq = msg_seg.get('data', {}).get('qq', '')
+                        if qq:
+                            text_parts.append(f'@{qq}')
             return ''.join(text_parts)
 
         return ""

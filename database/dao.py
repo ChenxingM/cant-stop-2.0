@@ -430,7 +430,8 @@ class GameStateDAO:
                 force_end_until_draw = ?,
                 next_dice_modify_any = ?,
                 next_dice_add_3_any = ?,
-                disabled_columns_this_round = ?
+                disabled_columns_this_round = ?,
+                pending_duel = ?
             WHERE qq_id = ?
         ''', (
             data['current_round_active'],
@@ -477,6 +478,7 @@ class GameStateDAO:
             data['next_dice_modify_any'],
             data['next_dice_add_3_any'],
             data['disabled_columns_this_round'],
+            data['pending_duel'],
             state.qq_id
         ))
         self.conn.commit()
@@ -574,15 +576,39 @@ class AchievementDAO:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
-    def add_achievement(self, qq_id: str, achievement_id: int, achievement_name: str, achievement_type: str):
-        """添加成就"""
+    def add_achievement(self, qq_id: str, achievement_id: int, achievement_name: str, achievement_type: str) -> bool:
+        """添加成就
+
+        Returns:
+            bool: 是否成功添加（如果已存在同名成就则返回False）
+        """
         cursor = self.conn.cursor()
+
+        # 先检查是否已有同名成就（不管achievement_id）
         cursor.execute('''
-            INSERT OR IGNORE INTO player_achievements
+            SELECT COUNT(*) as count FROM player_achievements
+            WHERE qq_id = ? AND achievement_name = ?
+        ''', (qq_id, achievement_name))
+        if cursor.fetchone()['count'] > 0:
+            return False
+
+        # 对于自定义成就(achievement_id=0)，生成唯一ID避免冲突
+        if achievement_id == 0:
+            cursor.execute('''
+                SELECT COALESCE(MIN(achievement_id), 0) - 1 as new_id
+                FROM player_achievements
+                WHERE qq_id = ? AND achievement_id <= 0
+            ''', (qq_id,))
+            achievement_id = cursor.fetchone()['new_id']
+
+        # 插入新成就
+        cursor.execute('''
+            INSERT INTO player_achievements
             (qq_id, achievement_id, achievement_name, achievement_type)
             VALUES (?, ?, ?, ?)
         ''', (qq_id, achievement_id, achievement_name, achievement_type))
         self.conn.commit()
+        return True
 
     def has_achievement(self, qq_id: str, achievement_id: int, achievement_type: str) -> bool:
         """检查是否拥有成就"""
@@ -668,7 +694,7 @@ class ContractDAO:
         if existing1:
             return False, f"您已经与其他玩家建立了契约关系"
         if existing2:
-            return False, f"对方已经与其他玩家建立了契约关系"
+            return False, f"对方已经与其他玩家建立了契约关系 不可以ntr哦"
 
         # 建立契约（确保player1_qq < player2_qq以保持一致性）
         if player1_qq > player2_qq:
