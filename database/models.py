@@ -118,6 +118,10 @@ class PlayerGameState:
     # 特殊触发
     pending_bonus_trigger: Optional[str] = None  # 等待的特殊触发（如 'thanks_fortune'）
 
+    # 限时打卡系统
+    # 格式: [{'deadline': 'ISO时间', 'success_achievement': '成就名', 'failure_achievement': '失败成就名', 'encounter_name': '遭遇名'}]
+    pending_timed_checkins: List[Dict] = field(default_factory=list)
+
     # 玫瑰道具效果
     has_red_rose: bool = False  # 红玫瑰：失败时可消耗10积分重试
     has_blue_rose_from: Optional[str] = None  # 蓝玫瑰：来自哪个Ae的帮助（Ae的QQ号）
@@ -175,6 +179,7 @@ class PlayerGameState:
             'disabled_columns_this_round': json.dumps(self.disabled_columns_this_round),
             'pending_duel': json.dumps(self.pending_duel) if self.pending_duel else None,
             'pending_bonus_trigger': self.pending_bonus_trigger,
+            'pending_timed_checkins': json.dumps(self.pending_timed_checkins),
             'has_red_rose': int(self.has_red_rose),
             'has_blue_rose_from': self.has_blue_rose_from,
             'yellow_rose_target': self.yellow_rose_target,
@@ -277,6 +282,7 @@ class PlayerGameState:
             disabled_columns_this_round=disabled_columns_this_round,
             pending_duel=json.loads(data['pending_duel']) if data.get('pending_duel') else None,
             pending_bonus_trigger=data.get('pending_bonus_trigger'),
+            pending_timed_checkins=json.loads(data['pending_timed_checkins']) if data.get('pending_timed_checkins') else [],
             has_red_rose=bool(data.get('has_red_rose', 0)),
             has_blue_rose_from=data.get('has_blue_rose_from'),
             yellow_rose_target=data.get('yellow_rose_target'),

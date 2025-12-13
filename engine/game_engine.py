@@ -123,9 +123,15 @@ class GameEngine:
 
     def start_round(self, qq_id: str) -> GameResult:
         """开始新轮次"""
+        # 检查并处理超时的限时打卡
+        expired_msgs = self.check_expired_checkins(qq_id)
+
         # 检查是否被锁定
         lockout_result = self._check_lockout(qq_id)
         if lockout_result:
+            # 如果有超时消息，附加到锁定消息后
+            if expired_msgs:
+                return GameResult(False, lockout_result.message + "\n\n" + "\n".join(expired_msgs))
             return lockout_result
 
         # 检查是否已选择阵营
@@ -155,6 +161,9 @@ class GameEngine:
         state.last_dice_result = None
         self.state_dao.update_state(state)
 
+        # 如果有超时消息，附加到成功消息后
+        if expired_msgs:
+            return GameResult(True, "新轮次已开启\n\n" + "\n".join(expired_msgs))
         return GameResult(True, "新轮次已开启")
 
     def roll_dice(self, qq_id: str, dice_count: int = 6) -> GameResult:
@@ -387,8 +396,8 @@ class GameEngine:
                 state.dice_history.append(results)
                 self.state_dao.update_state(state)
 
-                possible_sums = self._get_possible_sums(results)
-                combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)])
+                possible_sums = self._get_possible_sums(results, dice_groups)
+                combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)]) if possible_sums else "无有效组合"
                 message = f"🎲投掷结果: {' '.join(map(str, results))}{modifier_msg}{reroll_msg}\n可能的组合: {combinations_str}"
                 return GameResult(True, message, {
                     "results": results,
@@ -408,8 +417,8 @@ class GameEngine:
                 state.dice_history.append(results)
                 self.state_dao.update_state(state)
 
-                possible_sums = self._get_possible_sums(results)
-                combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)])
+                possible_sums = self._get_possible_sums(results, dice_groups)
+                combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)]) if possible_sums else "无有效组合"
                 message = f"🎲投掷结果: {' '.join(map(str, results))}{modifier_msg}{reroll_msg}\n可能的组合: {combinations_str}"
                 return GameResult(True, message, {
                     "results": results,
@@ -430,14 +439,19 @@ class GameEngine:
                     extra_die = random.randint(1, 6)
                     self.state_dao.update_state(state)
                     self.achievement_dao.add_achievement(qq_id, 0, "数学大王", "hidden")
+                    # 计算可能的组合
+                    possible_sums = self._get_possible_sums(results, dice_groups)
+                    combinations_str = ", ".join([f"({a}, {b})" for a, b in sorted(possible_sums)]) if possible_sums else "无有效组合"
                     message = (f"🎲投掷结果: {' '.join(map(str, results))}\n"
                               f"✨ 奇偶检定：奇数{odd_count}个 > 3，通过！\n"
                               f"🏆 获得成就［数学大王］\n"
-                              f"额外d6: {extra_die}，可以随意加到任意组合中")
+                              f"额外d6: {extra_die}，可以随意加到任意组合中\n"
+                              f"可能的组合: {combinations_str}")
                     # 这里暂时只返回提示，实际加值需要在记录数值时处理
                     return GameResult(True, message, {
                         "results": results,
-                        "extra_die": extra_die
+                        "extra_die": extra_die,
+                        "possible_sums": possible_sums
                     })
                 else:
                     # 未通过检定，本回合作废，发放成就［数学0蛋］
@@ -633,6 +647,9 @@ class GameEngine:
         # 检查是否在当前轮次
         state = self.state_dao.get_state(qq_id)
 
+        # 保存移动前的强制回合数（用于后续判断是否需要递减）
+        forced_rounds_before_move = state.forced_remaining_rounds
+
         # 检查是否有待完成的遭遇选择
         if state.pending_encounters:
             return GameResult(False, "⚠️ 您还有待完成的遭遇选择，请先完成选择！\n使用指令：选择：你的选择")
@@ -775,7 +792,8 @@ class GameEngine:
         state.temp_markers_used = len(set(p.column_number for p in self.position_dao.get_positions(qq_id, 'temp')))
 
         # 处理强制回合效果（犹豫就会败北）
-        if state.forced_remaining_rounds > 0:
+        # 只有移动前就已有强制回合时才递减（避免触发陷阱的那一回合被计入）
+        if forced_rounds_before_move > 0:
             state.forced_remaining_rounds -= 1
 
         # 清除骰子结果，要求玩家在下次记录数值前必须重新投掷骰子
@@ -785,6 +803,7 @@ class GameEngine:
         # 获取更新后的位置
         current_positions = self.position_dao.get_positions(qq_id)
         temp_positions = [p for p in current_positions if p.marker_type == 'temp']
+        print(f"[位置显示] {qq_id} 查询到的临时位置: {[(p.column_number, p.position) for p in temp_positions]}")
 
         position_str = ', '.join([f"列{p.column_number}第{p.position}格" for p in temp_positions])
         remaining = 3 - len(set(p.column_number for p in temp_positions))
@@ -850,14 +869,19 @@ class GameEngine:
         if trigger_content:
             content_msg = self._trigger_cell_content(qq_id, column, new_position)
 
-        # 检查是否到达列顶
-        if new_position >= column_height:
+        # 重新获取实际位置（可能被效果修改，如回退）
+        actual_positions = self.position_dao.get_positions(qq_id, 'temp')
+        actual_pos = next((p for p in actual_positions if p.column_number == column), None)
+        actual_position = actual_pos.position if actual_pos else 0
+
+        # 检查是否到达列顶（使用实际位置而非效果前位置）
+        if actual_position >= column_height:
             # 自动执行登顶流程
             top_result = self._auto_claim_column_top(qq_id, column)
-            topped_msg = f"列{column}移动到第{new_position}格 🎉 到达列顶！\n\n{top_result.message}"
+            topped_msg = f"列{column}移动到第{actual_position}格 🎉 到达列顶！\n\n{top_result.message}"
             return GameResult(True, topped_msg), content_msg
 
-        return GameResult(True, f"列{column}移动到第{new_position}格"), content_msg
+        return GameResult(True, f"列{column}移动到第{actual_position}格"), content_msg
 
     def end_round_active(self, qq_id: str) -> GameResult:
         """主动结束轮次（替换永久棋子）"""
@@ -1238,10 +1262,12 @@ class GameEngine:
         if not item:
             return GameResult(False, f"道具「{item_name}」不存在或尚未解锁")
 
-        # 获取玩家当前拥有该道具的数量
-        current_owned = self.inventory_dao.get_item_count(qq_id, item.item_id, item.item_type)
+        # 获取玩家总购买次数（使用成就系统记录）
+        purchase_key = f"购买_{item.item_id}"
+        achievements = self.achievement_dao.get_achievements(qq_id)
+        total_purchased = sum(1 for a in achievements if a.achievement_name == purchase_key)
 
-        can_buy, reason = item.can_buy(player, current_owned)
+        can_buy, reason = item.can_buy(player, total_purchased)
         if not can_buy:
             return GameResult(False, reason)
 
@@ -1265,7 +1291,19 @@ class GameEngine:
         # 更新商店库存
         self.shop_dao.purchase_item(item.item_id)
 
-        return GameResult(True, f"✅ 成功购买 {item.item_name}，消耗 {actual_price} 积分{half_price_msg}")
+        # 记录购买历史（用于限购检查）
+        self.achievement_dao.add_achievement(qq_id, 30000 + item.item_id, purchase_key, "normal")
+
+        # 构建限购提示
+        limit_msg = ""
+        if item.player_limit > 0:
+            remaining = item.player_limit - total_purchased - 1
+            if remaining > 0:
+                limit_msg = f"\n（剩余可购买次数：{remaining}）"
+            else:
+                limit_msg = "\n（已达到购买上限）"
+
+        return GameResult(True, f"✅ 成功购买 {item.item_name}，消耗 {actual_price} 积分{half_price_msg}{limit_msg}")
 
     # ==================== 特殊功能 ====================
 
@@ -1570,6 +1608,207 @@ class GameEngine:
 
         return GameResult(True, "\"真是有礼貌的孩子！\" 财神额外给了你一张免费掷骰券 🎟️")
 
+    def encounter_checkin(self, qq_id: str) -> GameResult:
+        """遭遇打卡，给玩家+5积分
+
+        Args:
+            qq_id: 玩家QQ号
+
+        Returns:
+            GameResult: 操作结果
+        """
+        # 检查玩家是否存在
+        player = self.player_dao.get_player(qq_id)
+        if not player:
+            return GameResult(False, "⚠️ 您还未注册，请先选择阵营！")
+
+        # 给玩家+5积分
+        self.player_dao.add_score(qq_id, 5)
+
+        # 获取更新后的积分
+        player = self.player_dao.get_player(qq_id)
+
+        return GameResult(True, f"✅ 遭遇打卡成功！获得 +5 积分\n当前积分：{player.current_score}")
+
+    def add_timed_checkin(self, qq_id: str, encounter_name: str, success_achievement: str,
+                          failure_achievement: str, days: int = 3) -> GameResult:
+        """添加限时打卡任务
+
+        Args:
+            qq_id: 玩家QQ号
+            encounter_name: 遭遇名称
+            success_achievement: 成功时的成就名
+            failure_achievement: 失败时的成就名
+            days: 期限天数，默认3天
+        """
+        from datetime import datetime, timedelta
+
+        state = self.state_dao.get_state(qq_id)
+        deadline = (datetime.now() + timedelta(days=days)).isoformat()
+
+        checkin_info = {
+            'encounter_name': encounter_name,
+            'success_achievement': success_achievement,
+            'failure_achievement': failure_achievement,
+            'deadline': deadline
+        }
+
+        state.pending_timed_checkins.append(checkin_info)
+        self.state_dao.update_state(state)
+
+        deadline_str = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d %H:%M')
+        return GameResult(True, f"⏰ 已添加限时打卡：{encounter_name}\n截止时间：{deadline_str}\n成功成就：{success_achievement}\n失败成就：{failure_achievement}")
+
+    def check_expired_checkins(self, qq_id: str) -> List[str]:
+        """检查并处理超时的打卡任务，返回超时消息列表"""
+        from datetime import datetime
+
+        state = self.state_dao.get_state(qq_id)
+        if not state.pending_timed_checkins:
+            return []
+
+        now = datetime.now()
+        expired_messages = []
+        remaining_checkins = []
+
+        for checkin in state.pending_timed_checkins:
+            deadline = datetime.fromisoformat(checkin['deadline'])
+            success_achievement = checkin['success_achievement']
+            failure_achievement = checkin['failure_achievement']
+            encounter_name = checkin['encounter_name']
+
+            if now > deadline:
+                # 检查是否已有成功成就
+                achievements = self.achievement_dao.get_achievements(qq_id)
+                has_success = any(a.achievement_name == success_achievement for a in achievements)
+
+                if has_success:
+                    # 已完成，移除打卡任务
+                    expired_messages.append(f"✅ 【{encounter_name}】打卡已完成！获得成就：{success_achievement}")
+                else:
+                    # 超时失败，给予失败成就
+                    self.achievement_dao.add_achievement(qq_id, 40000, failure_achievement, "normal")
+                    expired_messages.append(f"❌ 【{encounter_name}】打卡超时！获得成就：{failure_achievement}")
+            else:
+                remaining_checkins.append(checkin)
+
+        # 更新剩余的打卡任务
+        if len(remaining_checkins) != len(state.pending_timed_checkins):
+            state.pending_timed_checkins = remaining_checkins
+            self.state_dao.update_state(state)
+
+        return expired_messages
+
+    def view_timed_checkins(self, qq_id: str) -> GameResult:
+        """查看当前玩家的限时打卡任务"""
+        from datetime import datetime
+
+        state = self.state_dao.get_state(qq_id)
+
+        # 先检查超时的
+        expired_msgs = self.check_expired_checkins(qq_id)
+
+        # 重新获取状态
+        state = self.state_dao.get_state(qq_id)
+
+        if not state.pending_timed_checkins and not expired_msgs:
+            return GameResult(True, "📋 您当前没有待完成的限时打卡任务")
+
+        lines = ["📋 限时打卡任务："]
+
+        # 显示超时处理结果
+        if expired_msgs:
+            lines.append("\n【超时处理】")
+            lines.extend(expired_msgs)
+
+        # 显示进行中的任务
+        if state.pending_timed_checkins:
+            lines.append("\n【进行中】")
+            now = datetime.now()
+            for i, checkin in enumerate(state.pending_timed_checkins, 1):
+                deadline = datetime.fromisoformat(checkin['deadline'])
+                remaining = deadline - now
+                hours = int(remaining.total_seconds() / 3600)
+                days = hours // 24
+                hours_rem = hours % 24
+
+                if days > 0:
+                    time_str = f"{days}天{hours_rem}小时"
+                else:
+                    time_str = f"{hours}小时"
+
+                lines.append(f"{i}. 【{checkin['encounter_name']}】")
+                lines.append(f"   成功成就：{checkin['success_achievement']}")
+                lines.append(f"   剩余时间：{time_str}")
+
+        return GameResult(True, "\n".join(lines))
+
+    def claim_sideline(self, qq_id: str, line_id: int) -> GameResult:
+        """支线积分领取，+30积分，仅限领取一次
+
+        Args:
+            qq_id: 玩家QQ号
+            line_id: 支线编号
+
+        Returns:
+            GameResult: 操作结果
+        """
+        # 检查玩家是否存在
+        player = self.player_dao.get_player(qq_id)
+        if not player:
+            return GameResult(False, "⚠️ 您还未注册，请先选择阵营！")
+
+        # 使用成就系统记录是否已领取
+        claim_key = f"支线{line_id}领取"
+        achievements = self.achievement_dao.get_achievements(qq_id)
+        existing = any(a.achievement_name == claim_key for a in achievements)
+        if existing:
+            return GameResult(False, f"❌ 您已经领取过「支线{line_id}」的积分奖励了！")
+
+        # 发放积分
+        self.player_dao.add_score(qq_id, 30)
+
+        # 记录已领取（使用normal类型）
+        self.achievement_dao.add_achievement(qq_id, 10000 + line_id, claim_key, "normal")
+
+        # 获取更新后的积分
+        player = self.player_dao.get_player(qq_id)
+
+        return GameResult(True, f"✅ 支线{line_id}积分领取成功！获得 +30 积分\n当前积分：{player.current_score}")
+
+    def claim_mainline(self, qq_id: str, line_id: int) -> GameResult:
+        """主线积分领取，+50积分，仅限领取一次
+
+        Args:
+            qq_id: 玩家QQ号
+            line_id: 主线编号
+
+        Returns:
+            GameResult: 操作结果
+        """
+        # 检查玩家是否存在
+        player = self.player_dao.get_player(qq_id)
+        if not player:
+            return GameResult(False, "⚠️ 您还未注册，请先选择阵营！")
+
+        # 使用成就系统记录是否已领取
+        claim_key = f"主线{line_id}领取"
+        achievements = self.achievement_dao.get_achievements(qq_id)
+        existing = any(a.achievement_name == claim_key for a in achievements)
+        if existing:
+            return GameResult(False, f"❌ 您已经领取过「主线{line_id}」的积分奖励了！")
+
+        # 发放积分
+        self.player_dao.add_score(qq_id, 50)
+
+        # 记录已领取（使用normal类型）
+        self.achievement_dao.add_achievement(qq_id, 20000 + line_id, claim_key, "normal")
+
+        # 获取更新后的积分
+        player = self.player_dao.get_player(qq_id)
+
+        return GameResult(True, f"✅ 主线{line_id}积分领取成功！获得 +50 积分\n当前积分：{player.current_score}")
+
     # ==================== 特殊效果使用 ====================
 
     def use_last_dice(self, qq_id: str, dice_values: List[int]) -> GameResult:
@@ -1759,6 +1998,14 @@ class GameEngine:
                 result = self.content_handler._handle_encounter(
                     qq_id, item_id, item_name, is_first=True, choice=choice
                 )
+
+            # 如果遭遇/道具还需要继续输入，更新队列中的选项信息
+            if result.requires_input:
+                # 更新当前遭遇的选项
+                state.pending_encounters[0]['choices'] = result.choices or []
+                state.pending_encounters[0]['free_input'] = result.free_input
+                self.state_dao.update_state(state)
+                return GameResult(True, result.message)
 
             # 从队列中移除已处理的项目
             state.pending_encounters.pop(0)
@@ -2193,6 +2440,7 @@ class GameEngine:
 
             # 处理返回的effects
             if result and result.effects:
+                print(f"[触发内容] {qq_id} 效果字典: {result.effects}")
                 self._apply_content_effects(qq_id, result.effects)
 
             if result and result.message:
@@ -2245,8 +2493,12 @@ class GameEngine:
         if 'retreat' in effects and 'column' in effects:
             retreat_count = effects['retreat']
             column = effects['column']
-            self._retreat_position(qq_id, column, retreat_count)
-            print(f"[效果应用] {qq_id} 在列{column}回退 {retreat_count} 格")
+            print(f"[回退效果] {qq_id} 准备在列{column}回退 {retreat_count} 格")
+            if column is not None:
+                self._retreat_position(qq_id, column, retreat_count)
+                print(f"[效果应用] {qq_id} 在列{column}回退 {retreat_count} 格")
+            else:
+                print(f"[回退效果] {qq_id} 列号为None，跳过回退")
 
         # 处理所有列回退效果（七色章鱼）
         if 'retreat_all' in effects:
@@ -2696,24 +2948,35 @@ class GameEngine:
             column: 列号
             retreat_count: 回退格数
         """
+        print(f"[回退开始] {qq_id} 列{column} 回退{retreat_count}格")
         temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+        print(f"[回退] 当前临时位置: {[(p.column_number, p.position) for p in temp_positions]}")
         temp_pos = next((p for p in temp_positions if p.column_number == column), None)
 
         if not temp_pos:
+            print(f"[回退] 未找到列{column}的临时标记，跳过")
             return
 
+        print(f"[回退] 当前位置: 列{column}第{temp_pos.position}格")
         # 计算新位置
         new_position = temp_pos.position - retreat_count
+        print(f"[回退] 计算新位置: {temp_pos.position} - {retreat_count} = {new_position}")
 
         # 检查是否有永久标记
         permanent_positions = self.position_dao.get_positions(qq_id, 'permanent')
         permanent_pos = next((p for p in permanent_positions if p.column_number == column), None)
 
         if permanent_pos:
+            print(f"[回退] 该列有永久标记在第{permanent_pos.position}格")
             # 如果回退后的位置<=永久标记位置，则临时标记应该在永久标记+1的位置
             if new_position <= permanent_pos.position:
                 new_position = permanent_pos.position + 1
+                print(f"[回退] 回退位置低于永久标记，调整为第{new_position}格")
                 self.position_dao.add_or_update_position(qq_id, column, new_position, 'temp')
+                # 验证数据库更新
+                verify_pos = self.position_dao.get_positions(qq_id, 'temp')
+                verify_current = next((p for p in verify_pos if p.column_number == column), None)
+                print(f"[回退验证-永久标记] {qq_id} 列{column} 数据库当前值: {verify_current.position if verify_current else 'None'}")
                 return
 
         # 如果回退后位置<=0，移除临时标记
@@ -2722,6 +2985,11 @@ class GameEngine:
             print(f"[回退] {qq_id} 在列{column}的临时标记被移除（回退到起点以下）")
         else:
             self.position_dao.add_or_update_position(qq_id, column, new_position, 'temp')
+            print(f"[回退完成] {qq_id} 在列{column}回退到第{new_position}格")
+            # 验证数据库更新
+            verify_pos = self.position_dao.get_positions(qq_id, 'temp')
+            verify_current = next((p for p in verify_pos if p.column_number == column), None)
+            print(f"[回退验证] {qq_id} 列{column} 数据库当前值: {verify_current.position if verify_current else 'None'}")
 
     def _apply_hammer_effect(self, user_qq: str, column: int, position: int):
         """应用揍击派对效果 - 锤击指定位置所有玩家的标记（包括自己）

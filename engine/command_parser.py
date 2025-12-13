@@ -78,6 +78,19 @@ class CommandParser:
 
         # 特殊触发
         'thanks_fortune': r'^谢谢财神$',
+
+        # 遭遇打卡
+        'encounter_checkin': r'^遭遇打卡$',
+
+        # 支线/主线积分领取
+        'claim_sideline': r'^支线(\d+)领取$',
+        'claim_mainline': r'^主线(\d+)领取$',
+
+        # GM指令：限时打卡
+        # 格式：添加限时打卡 遭遇名 成功成就 失败成就 [天数]
+        'add_timed_checkin': r'^添加限时打卡\s+(.+?)\s+(.+?)\s+(.+?)(?:\s+(\d+))?$',
+        # 查看待完成的限时打卡
+        'view_timed_checkins': r'^查看限时打卡$',
     }
 
     @classmethod
@@ -171,11 +184,11 @@ class CommandParser:
                 item_name = bracket_coord_match.group(1).strip()
                 param_str = f"{bracket_coord_match.group(2)},{bracket_coord_match.group(3)}"
             else:
-                # 匹配：括号结尾 + 可选空格 + 数字参数（坐标格式，带逗号）
-                coord_match = re.match(r'^(.+?[）\]])\s*(\d+\s*,\s*[\d,\s]+)$', raw_input)
+                # 匹配：括号结尾 + 可选空格 + 数字参数（坐标格式，带逗号，支持中英文逗号）
+                coord_match = re.match(r'^(.+?[）\]])\s*(\d+\s*[,，]\s*[\d,，\s]+)$', raw_input)
                 if not coord_match:
-                    # 或者：任意内容 + 必须空格 + 数字参数（坐标格式，带逗号）
-                    coord_match = re.match(r'^(.+?)\s+(\d+\s*,\s*[\d,\s]+)$', raw_input)
+                    # 或者：任意内容 + 必须空格 + 数字参数（坐标格式，带逗号，支持中英文逗号）
+                    coord_match = re.match(r'^(.+?)\s+(\d+\s*[,，]\s*[\d,，\s]+)$', raw_input)
                 if coord_match:
                     item_name = coord_match.group(1).strip()
                     param_str = coord_match.group(2).strip()
@@ -243,6 +256,18 @@ class CommandParser:
         elif cmd_type == 'add_3_dice':
             params['dice_index'] = int(match.group(1))  # 骰子位置（1-6）
 
+        elif cmd_type == 'claim_sideline':
+            params['line_id'] = int(match.group(1))  # 支线编号
+
+        elif cmd_type == 'claim_mainline':
+            params['line_id'] = int(match.group(1))  # 主线编号
+
+        elif cmd_type == 'add_timed_checkin':
+            params['encounter_name'] = match.group(1)
+            params['success_achievement'] = match.group(2)
+            params['failure_achievement'] = match.group(3)
+            params['days'] = int(match.group(4)) if match.group(4) else 3
+
         return params
 
     @classmethod
@@ -286,7 +311,6 @@ class CommandParser:
 • 领取精致大图奖励1 - 领取打卡奖励
 • 我超级满意这张图1 - 附加奖励（+30分/张）
 • 领取草图奖励1*2 - 双倍奖励
-• 数列X登顶 - 领取登顶奖励（X为列号）
 
 🛒 道具商店
 • 购买道具名称 - 购买道具
@@ -300,8 +324,6 @@ class CommandParser:
 • 陷阱选择：移动到列11 - 对陷阱进行选择
 
 😺 特殊功能
-• 摸摸喵 - 每天限5次
-• 投喂喵 - 每天限5次
 • 购买丑喵玩偶 - 购买玩偶（150积分）
 • 捏捏丑喵玩偶 - 使用玩偶（每天3次）
 
@@ -354,6 +376,11 @@ COMMAND_HANDLERS = {
     'start_duel': 'start_duel',
     'respond_duel': 'respond_duel',
     'thanks_fortune': 'thanks_fortune',
+    'encounter_checkin': 'encounter_checkin',
+    'claim_sideline': 'claim_sideline',
+    'claim_mainline': 'claim_mainline',
+    'add_timed_checkin': 'add_timed_checkin',
+    'view_timed_checkins': 'view_timed_checkins',
 }
 
 

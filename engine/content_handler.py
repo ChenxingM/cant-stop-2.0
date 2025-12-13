@@ -660,7 +660,7 @@ class ContentHandler:
         if choice is None:
             return ContentResult(True,
                                f"📖 {encounter_name}\n\n"
-                               f"喵突然从灌木中窜了出来。喵\"喵\"地一声吃掉了你的骰子。",
+                               f"喵突然从灌木中窜了出来。",
                                requires_input=True,
                                choices=["\"吓死我了!\"", "摸摸猫", "静静看它走过去"])
 
@@ -2208,13 +2208,17 @@ class ContentHandler:
 
     def _use_super_cannon(self, qq_id: str, desired_rolls: list = None, **kwargs) -> ContentResult:
         """道具9: 超级大炮 - 直接指定出目"""
+        # 兼容从 reroll_values 参数获取（命令解析器会把多个数字解析为 reroll_values）
         if not desired_rolls:
-            return ContentResult(False, "请指定需要的出目 (格式: [1,2,3,4,5,6])")
+            desired_rolls = kwargs.get('reroll_values')
+
+        if not desired_rolls:
+            return ContentResult(False, "请指定需要的出目，例如：使用超级大炮 1,2,3,4,5,6")
 
         return ContentResult(True,
                            f"💥 使用超级大炮！\n"
-                           f"规则就是用来打破的！\n"
-                           f"直接指定出目: {desired_rolls}",
+                           f"\"规则 就是用来打破的！\"\n"
+                           f"下次投骰指定出目: {desired_rolls}",
                            {'forced_rolls': desired_rolls})
 
     def _use_golden_star(self, qq_id: str, choice: str = None, **kwargs) -> ContentResult:

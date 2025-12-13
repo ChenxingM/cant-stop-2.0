@@ -303,6 +303,12 @@ class DatabaseSchema:
         except sqlite3.OperationalError:
             pass
 
+        # 限时打卡系统
+        try:
+            cursor.execute('ALTER TABLE game_state ADD COLUMN pending_timed_checkins TEXT')
+        except sqlite3.OperationalError:
+            pass
+
         # 玫瑰道具字段
         try:
             cursor.execute('ALTER TABLE game_state ADD COLUMN has_red_rose INTEGER DEFAULT 0')
