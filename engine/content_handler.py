@@ -16,6 +16,7 @@ from database.dao import (
     PlayerDAO, InventoryDAO, AchievementDAO, PositionDAO, ShopDAO, GameStateDAO
 )
 from database.models import Player
+from engine.command_parser import normalize_punctuation
 
 
 @dataclass
@@ -644,6 +645,9 @@ class ContentHandler:
 
         handler = encounter_effects.get(encounter_id)
         if handler:
+            # 对 choice 进行标准化处理，不区分全角半角标点
+            if choice is not None:
+                choice = normalize_punctuation(choice)
             result = handler(qq_id, encounter_name, choice)
             # 防止处理器返回None
             if result is None:
@@ -673,7 +677,7 @@ class ContentHandler:
             return ContentResult(True,
                                "喵呼噜呼噜的，靠在你脚边蹭蹭，似乎很享受。\n\n"
                                "解锁指令：摸摸喵、投喂喵（每天限5次）")
-        else:  # 静静看它走过去
+        elif choice == "静静看它走过去":
             return ContentResult(True, "喵走过去了。\n\n无事发生。")
 
     def _encounter_dream(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
@@ -1066,9 +1070,37 @@ class ContentHandler:
                                "哦不，一瞬间你的大脑闪回了无数糟糕的回忆…本回合进度视为无效。",
                                {'invalidate_round': True})
         elif choice == "白色方块":
-            return ContentResult(True,
-                               "你感到一阵温暖，美好的记忆像清风温和地轻抚你的额头…自选一个临时标记往前一格。",
-                               {'move_temp_forward': 1})
+            # 获取玩家的临时标记位置
+            temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+            if not temp_positions:
+                return ContentResult(True, "你感到一阵温暖，美好的记忆像清风温和地轻抚你的额头…但你目前没有临时标记可以移动。")
+            elif len(temp_positions) == 1:
+                # 只有一个临时标记，直接移动
+                column = temp_positions[0].column_number
+                return ContentResult(True,
+                                   f"你感到一阵温暖，美好的记忆像清风温和地轻抚你的额头…列{column}的临时标记往前一格。",
+                                   {'move_temp_forward': 1, 'column': column})
+            else:
+                # 多个临时标记，需要玩家选择
+                choices = [f"列{pos.column_number}" for pos in temp_positions]
+                return ContentResult(True,
+                                   "你感到一阵温暖，美好的记忆像清风温和地轻抚你的额头…\n\n请选择要移动的临时标记：",
+                                   requires_input=True,
+                                   choices=choices)
+        elif choice.startswith("列"):
+            # 处理列选择
+            try:
+                column = int(choice[1:])
+                # 验证该列是否有临时标记
+                temp_positions = self.position_dao.get_positions(qq_id, 'temp')
+                valid_columns = [pos.column_number for pos in temp_positions]
+                if column not in valid_columns:
+                    return ContentResult(False, f"❌ 列{column}没有你的临时标记")
+                return ContentResult(True,
+                                   f"列{column}的临时标记往前一格。",
+                                   {'move_temp_forward': 1, 'column': column})
+            except ValueError:
+                return ContentResult(False, f"❌ 无效的选择：{choice}")
 
     def _encounter_android(self, qq_id: str, encounter_name: str, choice: str = None) -> ContentResult:
         """遭遇19: 自助问答"""
@@ -1181,7 +1213,7 @@ class ContentHandler:
                                f"📖 {encounter_name}\n\n"
                                f"僵尸的嘶吼声传入你的耳中，不知何时你发现你已经来到了一个丧尸危机爆发的世界中，而现在，你被困在了一个老宅中，手边只有一个小袋子和一瓶洗手液，你必须要选择其中一个东西来保护好自己...",
                                requires_input=True,
-                               choices=["选择小袋子", "选择洗手液"])
+                               choices=["小袋子", "洗手液"])
 
         if choice == "选择小袋子":
             self.player_dao.add_score(qq_id, 5)
@@ -1281,9 +1313,9 @@ class ContentHandler:
                                f"📖 {encounter_name}\n\n"
                                f"停，就是你，现在3分钟内讲一个冷笑话。",
                                requires_input=True,
-                               choices=["完成后输入[冷笑话已完成]", "无法完成"])
+                               choices=["冷笑话已完成", "无法完成"])
 
-        if choice == "完成后输入[冷笑话已完成]":
+        if choice == "冷笑话已完成":
             return ContentResult(True, "完成任务！")
         elif choice == "无法完成":
             self.player_dao.add_score(qq_id, -5)
@@ -1827,15 +1859,18 @@ class ContentHandler:
             inventory = self.inventory_dao.get_inventory(qq_id)
             has_flashlight = any(item.item_name == "手电筒" for item in inventory)
 
-            choices = ["贴墙潜行(消耗5积分)", "快步穿过"]
+            choices = ["贴墙潜行", "快步穿过"]
+            choice_hints = "\n\n选项说明：贴墙潜行消耗5积分"
             if has_flashlight:
-                choices.append("旋转手电筒(需要在[法庭]遭遇获得[手电筒])")
+                choices.append("旋转手电筒")
+                choice_hints += "；旋转手电筒需要手电筒道具(已拥有)"
 
             return ContentResult(True,
                                f"📖 {encounter_name}\n\n"
                                f"周围在你眼前黑了下去。你摸索着向前走，潮湿的木板路在脚下发出吱呀异响。\n"
                                f"不知走了多久，前方隐约透出一丝微弱的昏黄，随着脚步靠近，光线逐渐清晰，灯泡在头顶摇晃，投下扭曲的长影。\n"
-                               f"前方的薄雾里，隐约浮现一排排高瘦的黑影，背对着你一动不动，衣角在阴冷的风里轻轻飘动…",
+                               f"前方的薄雾里，隐约浮现一排排高瘦的黑影，背对着你一动不动，衣角在阴冷的风里轻轻飘动…"
+                               f"{choice_hints}",
                                requires_input=True,
                                choices=choices)
 
@@ -1850,6 +1885,13 @@ class ContentHandler:
             return ContentResult(True,
                                "你鼓足一口气,低着头快步冲向出口。刚走到黑影中间,最靠近你的那个突然缓缓转过身,一张没有五官的空白脸正对向你,冰冷的指尖擦过你的手臂。眼前的景象瞬间被黑暗吞噬,只留下刺耳的风声…你的积分-5")
         elif choice == "旋转手电筒":
+            # 重新检查是否还有手电筒（可能在选择前被使用了）
+            inventory = self.inventory_dao.get_inventory(qq_id)
+            flashlight = next((item for item in inventory if item.item_name == "手电筒"), None)
+            if not flashlight:
+                return ContentResult(False, "❌ 你的手电筒已经不见了！请选择其他选项。")
+            # 消耗手电筒
+            self.inventory_dao.remove_item(qq_id, flashlight.item_id, 'hidden')
             dice_rolls = [random.randint(1, 6) for _ in range(3)]
             bonus_score = sum(dice_rolls)
             self.player_dao.add_score(qq_id, bonus_score)
@@ -2093,10 +2135,14 @@ class ContentHandler:
             9112: self._use_blue_rose,          # 蓝玫瑰
             9113: self._use_yellow_rose,        # 黄玫瑰
             9116: self._use_underworld_lyre,    # 冥府里拉琴
+            9107: self._use_flashlight,         # 手电筒
         }
 
         handler = item_handlers.get(item_id)
         if handler:
+            # 对 kwargs 中的 choice 进行标准化处理，不区分全角半角标点
+            if 'choice' in kwargs and kwargs['choice'] is not None:
+                kwargs['choice'] = normalize_punctuation(kwargs['choice'])
             result = handler(qq_id, **kwargs)
             # 防止处理器返回None
             if result is None:
@@ -2853,6 +2899,17 @@ class ContentHandler:
                                f"琴声为你自己演奏...\n\n"
                                f"你在第{column}列的临时标记向前移动一格",
                                {'move_temp': (column, 1)})
+
+    def _use_flashlight(self, qq_id: str, **kwargs) -> ContentResult:
+        """隐藏道具9107: 手电筒 - 投掷3d6获得积分"""
+        dice_rolls = [random.randint(1, 6) for _ in range(3)]
+        bonus_score = sum(dice_rolls)
+        self.player_dao.add_score(qq_id, bonus_score)
+        return ContentResult(True,
+                           f"🔦 使用手电筒！\n"
+                           f"你点亮手电筒，光束在黑暗中划出耀眼的轨迹...\n\n"
+                           f"投掷3d6 = {dice_rolls}\n"
+                           f"你的积分+{bonus_score}")
 
     # ==================== 隐藏成就检测 ====================
 

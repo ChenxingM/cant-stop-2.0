@@ -391,9 +391,9 @@ class GMWindow(QMainWindow):
         self.players_tab = self._create_players_tab()
         self.tabs.addTab(self.players_tab, "👥 玩家管理")
 
-        # 游戏控制选项卡（新增）
+        # 全局控制选项卡
         self.control_tab = self._create_control_tab()
-        self.tabs.addTab(self.control_tab, "🎮 游戏控制")
+        self.tabs.addTab(self.control_tab, "🌍 全局控制")
 
         # 商店管理选项卡
         self.shop_tab = self._create_shop_tab()
@@ -457,7 +457,7 @@ class GMWindow(QMainWindow):
         self._show_player_detail(qq_id)
 
     def _create_players_tab(self) -> QWidget:
-        """创建玩家管理选项卡"""
+        """创建玩家管理选项卡（整合玩家操控功能）"""
         widget = QWidget()
         layout = QHBoxLayout(widget)
 
@@ -486,21 +486,27 @@ class GMWindow(QMainWindow):
 
         left_layout.addWidget(self.players_table)
 
-        # 右侧：玩家详情和操作
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
+        # 中间：玩家详情和基础操作
+        middle_widget = QWidget()
+        middle_layout = QVBoxLayout(middle_widget)
 
-        # 玩家进度显示（新增）
+        # 使用滚动区域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+
+        # 玩家进度显示
         progress_group = QGroupBox("📊 玩家进度")
         progress_layout = QVBoxLayout()
 
         self.progress_display = QTextEdit()
         self.progress_display.setReadOnly(True)
-        self.progress_display.setMaximumHeight(200)
+        self.progress_display.setMaximumHeight(150)
         progress_layout.addWidget(self.progress_display)
 
         progress_group.setLayout(progress_layout)
-        right_layout.addWidget(progress_group)
+        scroll_layout.addWidget(progress_group)
 
         # 玩家详情
         detail_group = QGroupBox("📋 详细信息")
@@ -508,10 +514,11 @@ class GMWindow(QMainWindow):
 
         self.player_detail = QTextEdit()
         self.player_detail.setReadOnly(True)
+        self.player_detail.setMaximumHeight(200)
         detail_layout.addWidget(self.player_detail)
 
         detail_group.setLayout(detail_layout)
-        right_layout.addWidget(detail_group)
+        scroll_layout.addWidget(detail_group)
 
         # 积分管理
         score_group = QGroupBox("💰 积分管理")
@@ -550,7 +557,7 @@ class GMWindow(QMainWindow):
         score_layout.addLayout(quick_btns, 3, 0, 1, 2)
 
         score_group.setLayout(score_layout)
-        right_layout.addWidget(score_group)
+        scroll_layout.addWidget(score_group)
 
         # 道具派发
         item_group = QGroupBox("🎁 道具派发")
@@ -559,6 +566,7 @@ class GMWindow(QMainWindow):
         item_layout.addWidget(QLabel("道具:"), 0, 0)
         self.item_combo = QComboBox()
         self.item_combo.setMinimumWidth(200)
+        self._init_item_combo()
         item_layout.addWidget(self.item_combo, 0, 1)
 
         item_layout.addWidget(QLabel("数量:"), 1, 0)
@@ -573,7 +581,7 @@ class GMWindow(QMainWindow):
         item_layout.addWidget(give_item_btn, 2, 0, 1, 2)
 
         item_group.setLayout(item_layout)
-        right_layout.addWidget(item_group)
+        scroll_layout.addWidget(item_group)
 
         # 成就派发
         achievement_group = QGroupBox("🏆 成就派发")
@@ -596,38 +604,20 @@ class GMWindow(QMainWindow):
         achievement_layout.addWidget(give_achievement_btn, 2, 0, 1, 2)
 
         achievement_group.setLayout(achievement_layout)
-        right_layout.addWidget(achievement_group)
+        scroll_layout.addWidget(achievement_group)
 
-        # 使用分割器
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
+        scroll.setWidget(scroll_content)
+        middle_layout.addWidget(scroll)
 
-        layout.addWidget(splitter)
+        # 右侧：游戏控制（从游戏控制tab移过来）
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
 
-        return widget
-
-    def _create_control_tab(self) -> QWidget:
-        """创建游戏控制选项卡（新增）"""
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-
-        # 左侧：玩家状态控制
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-
-        # 选择玩家
-        player_select_group = QGroupBox("👤 选择玩家")
-        player_select_layout = QVBoxLayout()
-
-        self.control_player_combo = QComboBox()
-        self.control_player_combo.currentIndexChanged.connect(self._on_control_player_changed)
-        player_select_layout.addWidget(self.control_player_combo)
-
-        player_select_group.setLayout(player_select_layout)
-        left_layout.addWidget(player_select_group)
+        # 使用滚动区域
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll_content = QWidget()
+        right_scroll_layout = QVBoxLayout(right_scroll_content)
 
         # 轮次控制
         round_group = QGroupBox("🎲 轮次控制")
@@ -652,7 +642,7 @@ class GMWindow(QMainWindow):
         round_layout.addWidget(self.clear_all_markers_btn, 1, 1)
 
         round_group.setLayout(round_layout)
-        left_layout.addWidget(round_group)
+        right_scroll_layout.addWidget(round_group)
 
         # 位置控制
         position_group = QGroupBox("📍 位置控制")
@@ -686,7 +676,29 @@ class GMWindow(QMainWindow):
         position_layout.addWidget(remove_marker_btn, 3, 1)
 
         position_group.setLayout(position_layout)
-        left_layout.addWidget(position_group)
+        right_scroll_layout.addWidget(position_group)
+
+        # 协会特制徽章（直接登顶）
+        badge_group = QGroupBox("🏅 协会特制徽章")
+        badge_layout = QGridLayout()
+
+        badge_layout.addWidget(QLabel("登顶列号:"), 0, 0)
+        self.badge_column_input = QSpinBox()
+        self.badge_column_input.setRange(3, 18)
+        self.badge_column_input.setValue(7)
+        badge_layout.addWidget(self.badge_column_input, 0, 1)
+
+        direct_top_btn = QPushButton("🎖️ 直接登顶")
+        direct_top_btn.clicked.connect(self._direct_top_column)
+        direct_top_btn.setStyleSheet("background-color: #FFD700; color: black; font-weight: bold;")
+        badge_layout.addWidget(direct_top_btn, 1, 0, 1, 2)
+
+        badge_info = QLabel("⚠️ 该操作会触发首达检查和12小时禁止")
+        badge_info.setStyleSheet("color: #FF5722; font-size: 10px;")
+        badge_layout.addWidget(badge_info, 2, 0, 1, 2)
+
+        badge_group.setLayout(badge_layout)
+        right_scroll_layout.addWidget(badge_group)
 
         # 状态控制
         state_group = QGroupBox("⚡ 状态控制")
@@ -696,7 +708,7 @@ class GMWindow(QMainWindow):
         state_layout.addWidget(QLabel("锁定时长(小时):"), 0, 0)
         self.lockout_hours_input = QSpinBox()
         self.lockout_hours_input.setRange(1, 72)
-        self.lockout_hours_input.setValue(24)
+        self.lockout_hours_input.setValue(12)
         state_layout.addWidget(self.lockout_hours_input, 0, 1)
 
         lock_btn = QPushButton("🔒 锁定玩家")
@@ -719,53 +731,128 @@ class GMWindow(QMainWindow):
         state_layout.addWidget(set_skip_btn, 3, 0, 1, 2)
 
         state_group.setLayout(state_layout)
-        left_layout.addWidget(state_group)
+        right_scroll_layout.addWidget(state_group)
 
-        left_layout.addStretch()
+        # 契约管理
+        contract_group = QGroupBox("💕 契约管理")
+        contract_layout = QGridLayout()
 
-        # 右侧：全局控制
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
+        # 当前契约显示
+        contract_layout.addWidget(QLabel("当前契约:"), 0, 0)
+        self.contract_display = QLabel("无")
+        self.contract_display.setStyleSheet("font-weight: bold; color: #E91E63;")
+        contract_layout.addWidget(self.contract_display, 0, 1)
 
-        # 全局游戏控制
-        global_group = QGroupBox("🌍 全局控制")
-        global_layout = QVBoxLayout()
+        # 设置契约对象
+        contract_layout.addWidget(QLabel("契约对象:"), 1, 0)
+        self.contract_target_combo = QComboBox()
+        self.contract_target_combo.setMinimumWidth(120)
+        contract_layout.addWidget(self.contract_target_combo, 1, 1)
+
+        set_contract_btn = QPushButton("💍 建立契约")
+        set_contract_btn.clicked.connect(self._set_contract)
+        set_contract_btn.setStyleSheet("background-color: #E91E63; color: white;")
+        contract_layout.addWidget(set_contract_btn, 2, 0)
+
+        remove_contract_btn = QPushButton("💔 解除契约")
+        remove_contract_btn.clicked.connect(self._remove_contract)
+        remove_contract_btn.setStyleSheet("background-color: #607D8B; color: white;")
+        contract_layout.addWidget(remove_contract_btn, 2, 1)
+
+        contract_group.setLayout(contract_layout)
+        right_scroll_layout.addWidget(contract_group)
+
+        # 当前状态显示
+        status_group = QGroupBox("📊 当前状态")
+        status_layout = QVBoxLayout()
+
+        self.control_status_display = QTextEdit()
+        self.control_status_display.setReadOnly(True)
+        self.control_status_display.setMaximumHeight(150)
+        status_layout.addWidget(self.control_status_display)
+
+        status_group.setLayout(status_layout)
+        right_scroll_layout.addWidget(status_group)
+
+        right_scroll.setWidget(right_scroll_content)
+        right_layout.addWidget(right_scroll)
+
+        # 使用分割器（三栏布局）
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(left_widget)
+        splitter.addWidget(middle_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(2, 2)
+
+        layout.addWidget(splitter)
+
+        return widget
+
+    def _create_control_tab(self) -> QWidget:
+        """创建全局控制选项卡"""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+
+        # 左侧：宝石池沼管理
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
 
         # 宝石池沼管理
-        gem_frame = QFrame()
-        gem_frame.setFrameStyle(QFrame.StyledPanel)
-        gem_layout = QGridLayout(gem_frame)
+        gem_group = QGroupBox("💎 宝石池沼管理")
+        gem_layout = QGridLayout()
 
         gem_layout.addWidget(QLabel("列:"), 0, 0)
         self.gem_column_input = QSpinBox()
         self.gem_column_input.setRange(3, 18)
+        self.gem_column_input.setValue(7)
         gem_layout.addWidget(self.gem_column_input, 0, 1)
 
-        gem_layout.addWidget(QLabel("位置:"), 0, 2)
+        gem_layout.addWidget(QLabel("位置:"), 1, 0)
         self.gem_pos_input = QSpinBox()
         self.gem_pos_input.setRange(1, 13)
-        gem_layout.addWidget(self.gem_pos_input, 0, 3)
+        self.gem_pos_input.setValue(1)
+        gem_layout.addWidget(self.gem_pos_input, 1, 1)
 
-        gem_layout.addWidget(QLabel("类型:"), 1, 0)
+        gem_layout.addWidget(QLabel("类型:"), 2, 0)
         self.gem_type_combo = QComboBox()
         self.gem_type_combo.addItems(["红宝石", "蓝宝石", "红池沼", "蓝池沼"])
-        gem_layout.addWidget(self.gem_type_combo, 1, 1, 1, 3)
+        gem_layout.addWidget(self.gem_type_combo, 2, 1)
 
         add_gem_btn = QPushButton("添加宝石/池沼")
         add_gem_btn.clicked.connect(self._add_gem)
         add_gem_btn.setStyleSheet("background-color: #E91E63; color: white;")
-        gem_layout.addWidget(add_gem_btn, 2, 0, 1, 2)
+        gem_layout.addWidget(add_gem_btn, 3, 0, 1, 2)
 
-        clear_gems_btn = QPushButton("清除所有")
+        clear_gems_btn = QPushButton("清除所有宝石/池沼")
         clear_gems_btn.clicked.connect(self._clear_all_gems)
         clear_gems_btn.setStyleSheet("background-color: #607D8B; color: white;")
-        gem_layout.addWidget(clear_gems_btn, 2, 2, 1, 2)
+        gem_layout.addWidget(clear_gems_btn, 4, 0, 1, 2)
 
-        global_layout.addWidget(QLabel("💎 宝石池沼管理"))
-        global_layout.addWidget(gem_frame)
+        gem_group.setLayout(gem_layout)
+        left_layout.addWidget(gem_group)
 
-        global_group.setLayout(global_layout)
-        right_layout.addWidget(global_group)
+        # 当前宝石池沼列表
+        gem_list_group = QGroupBox("📋 当前宝石/池沼")
+        gem_list_layout = QVBoxLayout()
+
+        self.gem_list_display = QTextEdit()
+        self.gem_list_display.setReadOnly(True)
+        gem_list_layout.addWidget(self.gem_list_display)
+
+        refresh_gem_btn = QPushButton("刷新列表")
+        refresh_gem_btn.clicked.connect(self._refresh_gem_list)
+        gem_list_layout.addWidget(refresh_gem_btn)
+
+        gem_list_group.setLayout(gem_list_layout)
+        left_layout.addWidget(gem_list_group)
+
+        left_layout.addStretch()
+
+        # 右侧：批量操作
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
 
         # 批量操作
         batch_group = QGroupBox("📦 批量操作")
@@ -795,16 +882,20 @@ class GMWindow(QMainWindow):
         batch_group.setLayout(batch_layout)
         right_layout.addWidget(batch_group)
 
-        # 当前玩家状态显示
-        status_group = QGroupBox("📊 当前玩家状态")
-        status_layout = QVBoxLayout()
+        # 首达记录
+        first_group = QGroupBox("🏆 首达记录")
+        first_layout = QVBoxLayout()
 
-        self.control_status_display = QTextEdit()
-        self.control_status_display.setReadOnly(True)
-        status_layout.addWidget(self.control_status_display)
+        self.first_achievement_display = QTextEdit()
+        self.first_achievement_display.setReadOnly(True)
+        first_layout.addWidget(self.first_achievement_display)
 
-        status_group.setLayout(status_layout)
-        right_layout.addWidget(status_group)
+        refresh_first_btn = QPushButton("刷新首达记录")
+        refresh_first_btn.clicked.connect(self._refresh_first_achievements)
+        first_layout.addWidget(refresh_first_btn)
+
+        first_group.setLayout(first_layout)
+        right_layout.addWidget(first_group)
 
         right_layout.addStretch()
 
@@ -951,12 +1042,9 @@ class GMWindow(QMainWindow):
 
         self._show_player_detail(qq_id)
         self._show_player_progress(qq_id)
-
-    def _on_control_player_changed(self):
-        """控制面板玩家选择改变"""
-        qq_id = self.control_player_combo.currentData()
-        if qq_id:
-            self._update_control_status(qq_id)
+        self._update_control_status(qq_id)
+        self._update_contract_display(qq_id)
+        self._refresh_contract_combo(qq_id)
 
     def _filter_players(self):
         """筛选玩家"""
@@ -1217,8 +1305,8 @@ QQ号: {player.qq_id}
         except Exception as e:
             QMessageBox.critical(self, "错误", f"派发失败: {str(e)}")
 
-    def _refresh_item_combo(self):
-        """刷新道具下拉框"""
+    def _init_item_combo(self):
+        """初始化道具下拉框"""
         self.item_combo.clear()
         items = self.shop_dao.get_all_items()
         for item in items:
@@ -1321,11 +1409,11 @@ QQ号: {player.qq_id}
 
     def _force_start_round(self):
         """强制开始轮次"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
         state = self.state_dao.get_state(qq_id)
         state.current_round_active = True
         state.can_start_new_round = False
@@ -1338,11 +1426,11 @@ QQ号: {player.qq_id}
 
     def _force_end_round(self):
         """强制结束轮次"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
         state = self.state_dao.get_state(qq_id)
         state.current_round_active = False
         state.can_start_new_round = True
@@ -1355,11 +1443,11 @@ QQ号: {player.qq_id}
 
     def _clear_temp_markers(self):
         """清除临时标记"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
         self.position_dao.clear_temp_positions(qq_id)
 
         player = self.player_dao.get_player(qq_id)
@@ -1369,11 +1457,11 @@ QQ号: {player.qq_id}
 
     def _clear_all_markers(self):
         """清除所有标记"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
         reply = QMessageBox.warning(self, "警告", "确定要清除该玩家的所有标记吗？",
                                    QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
@@ -1390,11 +1478,11 @@ QQ号: {player.qq_id}
 
     def _add_marker(self):
         """添加标记"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
         column = self.position_column_input.value()
         position = self.position_pos_input.value()
         marker_type = 'temp' if self.position_type_combo.currentIndex() == 0 else 'permanent'
@@ -1414,11 +1502,11 @@ QQ号: {player.qq_id}
 
     def _remove_marker(self):
         """移除标记"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
         column = self.position_column_input.value()
         marker_type = 'temp' if self.position_type_combo.currentIndex() == 0 else 'permanent'
 
@@ -1434,13 +1522,63 @@ QQ号: {player.qq_id}
         self._update_control_status(qq_id)
         self.refresh_map()
 
-    def _lock_player(self):
-        """锁定玩家"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+    def _direct_top_column(self):
+        """使用协会特制徽章直接登顶"""
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
+        column = self.badge_column_input.value()
+
+        # 验证列号
+        if column not in VALID_COLUMNS:
+            QMessageBox.warning(self, "警告", f"无效的列号: {column}")
+            return
+
+        # 检查是否已经登顶
+        state = self.state_dao.get_state(qq_id)
+        if column in state.topped_columns:
+            QMessageBox.warning(self, "警告", f"玩家已在列{column}登顶")
+            return
+
+        player = self.player_dao.get_player(qq_id)
+        reply = QMessageBox.question(
+            self, "确认",
+            f"确定要让 {player.nickname} 直接登顶列{column}吗？\n\n"
+            f"⚠️ 这将触发：\n"
+            f"• 基础登顶奖励(+10积分)\n"
+            f"• 首达检查（如果是全图首达则+20积分并锁定12小时）\n"
+            f"• 胜利检查（如果达成3列登顶）"
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # 调用游戏引擎的直接登顶方法
+        from engine.game_engine import GameEngine
+        engine = GameEngine(self.db_conn)
+        result_msg = engine._direct_top_column(qq_id, column)
+
+        self._log(f"使用协会特制徽章让 {player.nickname} 直接登顶列{column}")
+
+        # 显示结果
+        if result_msg:
+            QMessageBox.information(self, "登顶成功", f"🎉 {player.nickname} 已登顶列{column}！\n\n{result_msg}")
+        else:
+            QMessageBox.information(self, "登顶成功", f"🎉 {player.nickname} 已登顶列{column}！")
+
+        self._update_control_status(qq_id)
+        self._show_player_progress(qq_id)
+        self.refresh_map()
+        self.refresh_players()
+
+    def _lock_player(self):
+        """锁定玩家"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        qq_id = self.selected_qq_id
         hours = self.lockout_hours_input.value()
         lockout_time = datetime.now() + timedelta(hours=hours)
 
@@ -1455,11 +1593,11 @@ QQ号: {player.qq_id}
 
     def _unlock_player(self):
         """解锁玩家"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
         state = self.state_dao.get_state(qq_id)
         state.lockout_until = None
         self.state_dao.update_state(state)
@@ -1471,11 +1609,11 @@ QQ号: {player.qq_id}
 
     def _set_skip_rounds(self):
         """设置跳过回合"""
-        qq_id = self.control_player_combo.currentData()
-        if not qq_id:
+        if not self.selected_qq_id:
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
+        qq_id = self.selected_qq_id
         skip_rounds = self.skip_rounds_input.value()
 
         state = self.state_dao.get_state(qq_id)
@@ -1498,6 +1636,7 @@ QQ号: {player.qq_id}
 
         self._log(f"在列{column}第{position}格添加{self.gem_type_combo.currentText()}")
         self.refresh_map()
+        self._refresh_gem_list()
 
     def _clear_all_gems(self):
         """清除所有宝石池沼"""
@@ -1508,6 +1647,62 @@ QQ号: {player.qq_id}
             self.db_conn.commit()
             self._log("清除所有宝石和池沼")
             self.refresh_map()
+            self._refresh_gem_list()
+
+    def _refresh_gem_list(self):
+        """刷新宝石池沼列表"""
+        gems = self.gem_dao.get_all_active_gems()
+
+        gem_type_names = {
+            'red_gem': '🔴 红宝石',
+            'blue_gem': '🔵 蓝宝石',
+            'red_pool': '🟠 红池沼',
+            'blue_pool': '🟣 蓝池沼'
+        }
+
+        if not gems:
+            self.gem_list_display.setText("当前没有活跃的宝石/池沼")
+            return
+
+        text = f"共 {len(gems)} 个活跃的宝石/池沼:\n\n"
+        for gem in sorted(gems, key=lambda x: (x.get('column_number', 0), x.get('position', 0))):
+            gem_type = gem.get('gem_type', '')
+            col = gem.get('column_number', 0)
+            pos = gem.get('position', 0)
+            type_name = gem_type_names.get(gem_type, gem_type)
+            text += f"  列{col} 第{pos}格: {type_name}\n"
+
+        self.gem_list_display.setText(text)
+
+    def _refresh_first_achievements(self):
+        """刷新首达记录"""
+        cursor = self.db_conn.cursor()
+        cursor.execute('''
+            SELECT f.column_number, f.first_qq_id, p.nickname
+            FROM first_achievements f
+            LEFT JOIN players p ON f.first_qq_id = p.qq_id
+            ORDER BY f.column_number
+        ''')
+        records = cursor.fetchall()
+
+        if not records:
+            self.first_achievement_display.setText("暂无首达记录")
+            return
+
+        text = f"共 {len(records)} 个首达记录:\n\n"
+        for record in records:
+            col = record['column_number']
+            qq_id = record['first_qq_id']
+            nickname = record['nickname'] or qq_id
+            text += f"  列{col}: {nickname}\n"
+
+        # 显示未被首达的列
+        achieved_columns = {r['column_number'] for r in records}
+        unachieved = [c for c in VALID_COLUMNS if c not in achieved_columns]
+        if unachieved:
+            text += f"\n未首达的列: {', '.join(map(str, unachieved))}"
+
+        self.first_achievement_display.setText(text)
 
     def _batch_add_score(self):
         """批量发放积分"""
@@ -1544,6 +1739,122 @@ QQ号: {player.qq_id}
 
         self._log("解除所有玩家锁定")
         self.refresh_players()
+
+    # ==================== 契约管理操作 ====================
+
+    def _set_contract(self):
+        """建立契约"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        target_qq = self.contract_target_combo.currentData()
+        if not target_qq:
+            QMessageBox.warning(self, "警告", "请选择契约对象")
+            return
+
+        if target_qq == self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "不能与自己建立契约")
+            return
+
+        qq_id = self.selected_qq_id
+        player = self.player_dao.get_player(qq_id)
+        target_player = self.player_dao.get_player(target_qq)
+
+        # 检查是否已有契约
+        existing_partner = self.contract_dao.get_contract_partner(qq_id)
+        if existing_partner:
+            existing_name = self.player_dao.get_player(existing_partner)
+            existing_name = existing_name.nickname if existing_name else existing_partner
+            reply = QMessageBox.question(
+                self, "确认",
+                f"{player.nickname} 已与 {existing_name} 建立契约。\n是否解除旧契约并与 {target_player.nickname} 建立新契约？"
+            )
+            if reply != QMessageBox.Yes:
+                return
+            # 解除旧契约
+            self.contract_dao.remove_contract(qq_id)
+
+        # 检查目标是否已有契约
+        target_partner = self.contract_dao.get_contract_partner(target_qq)
+        if target_partner:
+            target_partner_name = self.player_dao.get_player(target_partner)
+            target_partner_name = target_partner_name.nickname if target_partner_name else target_partner
+            reply = QMessageBox.question(
+                self, "确认",
+                f"{target_player.nickname} 已与 {target_partner_name} 建立契约。\n是否解除对方旧契约？"
+            )
+            if reply != QMessageBox.Yes:
+                return
+            # 解除目标的旧契约
+            self.contract_dao.remove_contract(target_qq)
+
+        # 建立新契约
+        success, msg = self.contract_dao.create_contract(qq_id, target_qq)
+        if success:
+            self._log(f"建立契约: {player.nickname} ↔ {target_player.nickname}")
+            QMessageBox.information(self, "成功", f"💍 {player.nickname} 与 {target_player.nickname} 建立了契约！")
+            self._update_contract_display(qq_id)
+            self._show_player_detail(qq_id)
+        else:
+            QMessageBox.warning(self, "失败", msg)
+
+    def _remove_contract(self):
+        """解除契约"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        qq_id = self.selected_qq_id
+        partner_qq = self.contract_dao.get_contract_partner(qq_id)
+
+        if not partner_qq:
+            QMessageBox.warning(self, "警告", "该玩家没有契约关系")
+            return
+
+        player = self.player_dao.get_player(qq_id)
+        partner = self.player_dao.get_player(partner_qq)
+        partner_name = partner.nickname if partner else partner_qq
+
+        reply = QMessageBox.question(
+            self, "确认",
+            f"确定要解除 {player.nickname} 与 {partner_name} 的契约吗？"
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        if self.contract_dao.remove_contract(qq_id):
+            self._log(f"解除契约: {player.nickname} ↔ {partner_name}")
+            QMessageBox.information(self, "成功", f"💔 已解除 {player.nickname} 与 {partner_name} 的契约")
+            self._update_contract_display(qq_id)
+            self._show_player_detail(qq_id)
+        else:
+            QMessageBox.warning(self, "失败", "解除契约失败")
+
+    def _update_contract_display(self, qq_id: str):
+        """更新契约显示"""
+        partner_qq = self.contract_dao.get_contract_partner(qq_id)
+        if partner_qq:
+            partner = self.player_dao.get_player(partner_qq)
+            partner_name = partner.nickname if partner else partner_qq
+            self.contract_display.setText(f"{partner_name}")
+            self.contract_display.setStyleSheet("font-weight: bold; color: #E91E63;")
+        else:
+            self.contract_display.setText("无")
+            self.contract_display.setStyleSheet("font-weight: bold; color: #9E9E9E;")
+
+    def _refresh_contract_combo(self, exclude_qq: str = None):
+        """刷新契约对象下拉框"""
+        self.contract_target_combo.clear()
+        self.contract_target_combo.addItem("-- 选择玩家 --", None)
+
+        players = self.player_dao.get_all_players()
+        for player in players:
+            if player.qq_id != exclude_qq:
+                self.contract_target_combo.addItem(
+                    f"{player.nickname} ({player.qq_id})",
+                    player.qq_id
+                )
 
     # ==================== 商店操作 ====================
 
@@ -1614,13 +1925,14 @@ QQ号: {player.qq_id}
         self.refresh_map()
         self.refresh_shop()
         self.refresh_stats()
-        self._refresh_item_combo()
-        self._refresh_control_player_combo()
+        # 注意：不在自动刷新中刷新道具下拉框，避免用户选择时被重置
+        # 道具列表在初始化时已填充，无需每次刷新
         self._refresh_map_player_filter()
+        self._refresh_gem_list()
+        self._refresh_first_achievements()
 
         if self.selected_qq_id:
-            state = self.state_dao.get_state(self.selected_qq_id)
-            self._update_lockout_display(state)
+            self._update_control_status(self.selected_qq_id)
 
     def refresh_players(self):
         """刷新玩家列表"""
@@ -1743,25 +2055,6 @@ QQ号: {player.qq_id}
         for i, p in enumerate(sorted_players):
             medal = ["🥇", "🥈", "🥉"][i] if i < 3 else f"{i+1}."
             self.rank_list.addItem(f"{medal} {p.nickname}: {p.current_score}分")
-
-    def _refresh_control_player_combo(self):
-        """刷新控制面板玩家下拉框"""
-        current_data = self.control_player_combo.currentData()
-        self.control_player_combo.clear()
-
-        players = self.player_dao.get_all_players()
-        for player in players:
-            self.control_player_combo.addItem(
-                f"{player.nickname} ({player.qq_id})",
-                player.qq_id
-            )
-
-        # 恢复之前的选择
-        if current_data:
-            for i in range(self.control_player_combo.count()):
-                if self.control_player_combo.itemData(i) == current_data:
-                    self.control_player_combo.setCurrentIndex(i)
-                    break
 
     def _refresh_map_player_filter(self):
         """刷新地图玩家筛选下拉框"""

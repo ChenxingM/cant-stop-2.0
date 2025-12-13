@@ -9,6 +9,52 @@ from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
 
+# 全角标点到半角标点的映射表
+FULLWIDTH_TO_HALFWIDTH = {
+    '，': ',',  # 逗号
+    '：': ':',  # 冒号
+    '；': ';',  # 分号
+    '！': '!',  # 感叹号
+    '？': '?',  # 问号
+    '（': '(',  # 左括号
+    '）': ')',  # 右括号
+    '【': '[',  # 左方括号
+    '】': ']',  # 右方括号
+    '「': '"',  # 左角括号 -> 引号
+    '」': '"',  # 右角括号 -> 引号
+    '『': '"',  # 左双角括号 -> 引号
+    '』': '"',  # 右双角括号 -> 引号
+    '"': '"',   # 左双引号
+    '"': '"',   # 右双引号
+    ''': "'",   # 左单引号
+    ''': "'",   # 右单引号
+    '＂': '"',  # 全角双引号
+    '＇': "'",  # 全角单引号
+    '～': '~',  # 波浪号
+    '＋': '+',  # 加号
+    '－': '-',  # 减号
+    '＊': '*',  # 星号
+    '／': '/',  # 斜杠
+    '．': '.',  # 句点
+    '　': ' ',  # 全角空格
+}
+
+
+def normalize_punctuation(text: str) -> str:
+    """
+    将全角标点符号转换为半角标点符号
+
+    Args:
+        text: 输入文本
+
+    Returns:
+        转换后的文本
+    """
+    for fullwidth, halfwidth in FULLWIDTH_TO_HALFWIDTH.items():
+        text = text.replace(fullwidth, halfwidth)
+    return text
+
+
 @dataclass
 class Command:
     """指令对象"""
@@ -23,7 +69,7 @@ class CommandParser:
     # 指令模式定义
     PATTERNS = {
         # 基础指令
-        'choose_faction': r'^选择阵营[:：]\s*(收养人|Aeonreth)$',
+        'choose_faction': r'^选择阵营:\s*(收养人|Aeonreth)$',
         'help': r'^help$',
 
         # 游戏进行
@@ -31,7 +77,7 @@ class CommandParser:
         'roll_dice': r'^\.r(\d+)d(\d+)$',
         'reroll': r'^重投$',
         'record_single': r'^(\d+)$',
-        'record_double': r'^(\d+)[,，]\s*(\d+)$',
+        'record_double': r'^(\d+),\s*(\d+)$',
         'end_active': r'^替换永久棋子$',
         'end_passive': r'^进度回退$',
         'finish_checkin': r'^打卡完毕$',
@@ -48,19 +94,19 @@ class CommandParser:
         'claim_top': r'^数列(\d+)登顶$',
 
         # 特殊效果使用（需要在use_item之前，因为更特定）
-        'use_last_dice': r'^使用上轮骰子[:：]?\s*(\d+)[,，](\d+)[,，](\d+)$',  # 使用上轮骰子：3,4,5
-        'change_dice': r'^修改骰子[:：]?\s*(\d+)[,，](\d+)$',  # 修改骰子：位置,新值
-        'add_3_dice': r'^骰子加3[:：]?\s*(\d+)$',  # 骰子加3：位置
+        'use_last_dice': r'^使用上轮骰子:?\s*(\d+),(\d+),(\d+)$',  # 使用上轮骰子:3,4,5
+        'change_dice': r'^修改骰子:?\s*(\d+),(\d+)$',  # 修改骰子:位置,新值
+        'add_3_dice': r'^骰子加3:?\s*(\d+)$',  # 骰子加3:位置
 
         # 道具相关
         'buy_item': r'^购买(.+)$',
         'use_item': r'^使用(.+)$',
 
         # 遭遇/道具选择
-        'make_choice': r'^选择[:：]?\s*(.+)$',
+        'make_choice': r'^选择:?\s*(.+)$',
 
         # 陷阱选择
-        'make_trap_choice': r'^陷阱选择[:：]?\s*(.+)$',
+        'make_trap_choice': r'^陷阱选择:?\s*(.+)$',
 
         # 对决系统
         'start_duel': r'^对决\s*@?(\d+)$',  # 对决@QQ号
@@ -105,6 +151,8 @@ class CommandParser:
             Command对象，如果无法识别则返回None
         """
         text = text.strip()
+        # 统一全角标点为半角标点
+        text = normalize_punctuation(text)
 
         # 尝试匹配各种指令模式
         for cmd_type, pattern in cls.PATTERNS.items():
@@ -178,23 +226,23 @@ class CommandParser:
             # 6. "花言巧语（通用）906081155" - 括号结尾 + 单个数字（QQ号）
             # 7. "花言巧语（通用） 906081155" - 括号结尾 + 空格 + 单个数字
 
-            # 先尝试匹配括号包裹的坐标：（14,6）或 (14,6)
-            bracket_coord_match = re.match(r'^(.+?)\s*[（\(](\d+)\s*[,，]\s*(\d+)[）\)]$', raw_input)
+            # 先尝试匹配括号包裹的坐标：(14,6)
+            bracket_coord_match = re.match(r'^(.+?)\s*\((\d+)\s*,\s*(\d+)\)$', raw_input)
             if bracket_coord_match:
                 item_name = bracket_coord_match.group(1).strip()
                 param_str = f"{bracket_coord_match.group(2)},{bracket_coord_match.group(3)}"
             else:
-                # 匹配：括号结尾 + 可选空格 + 数字参数（坐标格式，带逗号，支持中英文逗号）
-                coord_match = re.match(r'^(.+?[）\]])\s*(\d+\s*[,，]\s*[\d,，\s]+)$', raw_input)
+                # 匹配：括号结尾 + 可选空格 + 数字参数（坐标格式，带逗号）
+                coord_match = re.match(r'^(.+?[\)\]])\s*(\d+\s*,\s*[\d,\s]+)$', raw_input)
                 if not coord_match:
-                    # 或者：任意内容 + 必须空格 + 数字参数（坐标格式，带逗号，支持中英文逗号）
-                    coord_match = re.match(r'^(.+?)\s+(\d+\s*[,，]\s*[\d,，\s]+)$', raw_input)
+                    # 或者：任意内容 + 必须空格 + 数字参数（坐标格式，带逗号）
+                    coord_match = re.match(r'^(.+?)\s+(\d+\s*,\s*[\d,\s]+)$', raw_input)
                 if coord_match:
                     item_name = coord_match.group(1).strip()
                     param_str = coord_match.group(2).strip()
                 else:
                     # 尝试匹配单个数字（如QQ号）：括号结尾 + 可选空格 + 纯数字
-                    single_num_match = re.match(r'^(.+?[）\]])\s*(\d+)$', raw_input)
+                    single_num_match = re.match(r'^(.+?[\)\]])\s*(\d+)$', raw_input)
                     if not single_num_match:
                         # 或者：任意内容 + 空格 + 纯数字
                         single_num_match = re.match(r'^(.+?)\s+(\d+)$', raw_input)
@@ -206,19 +254,17 @@ class CommandParser:
                         item_name = raw_input
                         param_str = None
 
-            # 移除阵营标签（如 [收养人专用]、[Aeonreth专用]、（通用）等）
-            item_name = re.sub(r'\s*[\[（].*?[\]）]\s*$', '', item_name)
+            # 移除阵营标签（如 [收养人专用]、[Aeonreth专用]、(通用) 等）
+            item_name = re.sub(r'\s*[\[(].*?[\])]\s*$', '', item_name)
             params['item_name'] = item_name.strip()
 
             # 如果有额外参数，尝试解析
             if param_str:
                 # 移除各种括号（如果有）
-                param_str = re.sub(r'^[（\(\[]+', '', param_str)
-                param_str = re.sub(r'[）\)\]]+$', '', param_str)
+                param_str = re.sub(r'^[\(\[]+', '', param_str)
+                param_str = re.sub(r'[\)\]]+$', '', param_str)
                 # 尝试解析为数字列表
                 try:
-                    # 支持中英文逗号
-                    param_str = param_str.replace('，', ',')
                     if ',' in param_str:
                         numbers = [int(x.strip()) for x in param_str.split(',')]
                         # 如果是2个数字，可能是坐标（用于我的地图等道具）

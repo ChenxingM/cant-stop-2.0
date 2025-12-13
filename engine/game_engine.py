@@ -20,6 +20,7 @@ from database.dao import (
 from database.models import Player, Position, DAILY_LIMITS, ACHIEVEMENTS
 from data.board_config import BOARD_DATA, COLUMN_HEIGHTS, VALID_COLUMNS
 from engine.content_handler import ContentHandler
+from engine.command_parser import normalize_punctuation
 
 
 @dataclass
@@ -46,6 +47,52 @@ class GameEngine:
             self.player_dao, self.inventory_dao, self.achievement_dao,
             self.position_dao, self.shop_dao, db_conn
         )
+
+    # ==================== 辅助方法 ====================
+
+    def _match_choice(self, choice: str, available_choices: List[str]) -> Optional[str]:
+        """标准化匹配选择项，不区分全角半角标点、引号、大小写
+
+        Args:
+            choice: 用户输入的选择
+            available_choices: 可用的选项列表
+
+        Returns:
+            匹配到的原始选项，如果没有匹配返回 None
+        """
+        import re
+
+        def strip_quotes(s: str) -> str:
+            """去掉字符串两端的所有类型引号"""
+            # 先去掉两端的引号字符（包括各种中英文引号）
+            quote_chars = '"\'"「」『』""''＂＇'
+            result = s.strip()
+            while result and result[0] in quote_chars:
+                result = result[1:]
+            while result and result[-1] in quote_chars:
+                result = result[:-1]
+            return result
+
+        normalized_choice = normalize_punctuation(choice)
+        stripped_choice = strip_quotes(normalized_choice)
+
+        for c in available_choices:
+            normalized_c = normalize_punctuation(c)
+            stripped_c = strip_quotes(normalized_c)
+
+            # 精确匹配（标准化后）
+            if normalized_c == normalized_choice:
+                return c
+            # 忽略引号匹配
+            if stripped_c == stripped_choice:
+                return c
+            # 忽略大小写匹配
+            if normalized_c.lower() == normalized_choice.lower():
+                return c
+            if stripped_c.lower() == stripped_choice.lower():
+                return c
+
+        return None
 
     # ==================== 通用检查 ====================
 
@@ -759,11 +806,6 @@ class GameEngine:
                 state.pending_trap_choice = None
                 self.state_dao.update_state(state)
 
-        # 找出每个数值最后一次出现的索引（用于只在最后一次移动时触发遭遇）
-        last_occurrence = {}
-        for idx, val in enumerate(values):
-            last_occurrence[val] = idx
-
         # 移动标记
         messages = []
         content_messages = []
@@ -774,11 +816,9 @@ class GameEngine:
             temp_positions = [p for p in current_positions if p.marker_type == 'temp']
             permanent_positions = [p for p in current_positions if p.marker_type == 'permanent']
 
-            # 只在该数值最后一次出现时触发遭遇
-            should_trigger = (idx == last_occurrence[val])
-
+            # 每次移动都触发所到达格子的内容（同一列走两格时两个格子都触发）
             result, content_msg = self._move_marker(qq_id, val, temp_positions, permanent_positions,
-                                                   trigger_content=should_trigger)
+                                                   trigger_content=True)
             messages.append(result.message)
             if content_msg:
                 content_messages.append(content_msg)
@@ -1257,7 +1297,19 @@ class GameEngine:
             return lockout_result
 
         player = self.player_dao.get_player(qq_id)
-        item = self.shop_dao.get_item_by_name(item_name)
+
+        # 全角转半角标准化
+        normalized_name = normalize_punctuation(item_name)
+        item = self.shop_dao.get_item_by_name(normalized_name)
+
+        # 如果直接匹配失败，尝试遍历商店进行标准化匹配（忽略大小写）
+        if not item:
+            all_items = self.shop_dao.get_all_items()
+            for shop_item in all_items:
+                shop_normalized = normalize_punctuation(shop_item.item_name)
+                if shop_normalized.lower() == normalized_name.lower():
+                    item = shop_item
+                    break
 
         if not item:
             return GameResult(False, f"道具「{item_name}」不存在或尚未解锁")
@@ -1980,10 +2032,15 @@ class GameEngine:
         free_input = pending_info.get('free_input', False)  # 是否自由输入
 
         # 验证选择是否有效（自由输入模式跳过验证）
-        if not free_input and available_choices and choice not in available_choices:
-            choices_str = '\n'.join([f"• {c}" for c in available_choices])
-            return GameResult(False,
-                            f"❌ 无效的选择！请从以下选项中选择：\n{choices_str}")
+        # 使用标准化比较，不区分全角半角标点
+        if not free_input and available_choices:
+            matched_choice = self._match_choice(choice, available_choices)
+            if matched_choice is None:
+                choices_str = '\n'.join([f"• {c}" for c in available_choices])
+                return GameResult(False,
+                                f"❌ 无效的选择！请从以下选项中选择：\n{choices_str}")
+            # 使用匹配到的原始选项
+            choice = matched_choice
 
         # 调用content_handler处理选择
         try:
@@ -2013,8 +2070,14 @@ class GameEngine:
             self.state_dao.update_state(state)
 
             # 应用效果（这会重新获取state并保存）
+            extra_msg = ''
             if result.effects:
-                self._apply_content_effects(qq_id, result.effects)
+                extra_msg = self._apply_content_effects(qq_id, result.effects)
+
+            # 组合消息
+            final_message = result.message
+            if extra_msg:
+                final_message = f"{result.message}\n\n{extra_msg}"
 
             # 重新获取更新后的state
             state = self.state_dao.get_state(qq_id)
@@ -2030,9 +2093,9 @@ class GameEngine:
                     additional_msg = (f"\n\n⚠️ 您还有待处理的{type_name}：{next_item['encounter_name']}\n"
                                     f"请选择：\n{choices_str}\n\n"
                                     f"💡 使用「选择：你的选择」来进行选择")
-                    return GameResult(True, result.message + additional_msg)
+                    return GameResult(True, final_message + additional_msg)
 
-            return GameResult(True, result.message)
+            return GameResult(True, final_message)
 
         except Exception as e:
             return GameResult(False, f"处理选择时出错: {e}")
@@ -2054,11 +2117,15 @@ class GameEngine:
         available_choices = trap_info.get('choices', [])
         extra_data = trap_info.get('extra_data', {})
 
-        # 验证选择是否有效
-        if available_choices and choice not in available_choices:
-            choices_str = '\n'.join([f"• {c}" for c in available_choices])
-            return GameResult(False,
-                            f"❌ 无效的选择！请从以下选项中选择：\n{choices_str}")
+        # 验证选择是否有效（使用标准化比较，不区分全角半角标点）
+        if available_choices:
+            matched_choice = self._match_choice(choice, available_choices)
+            if matched_choice is None:
+                choices_str = '\n'.join([f"• {c}" for c in available_choices])
+                return GameResult(False,
+                                f"❌ 无效的选择！请从以下选项中选择：\n{choices_str}")
+            # 使用匹配到的原始选项
+            choice = matched_choice
 
         # 根据陷阱类型处理选择
         try:
@@ -2214,14 +2281,18 @@ class GameEngine:
 
         # 从玩家背包中查找该道具（支持模糊匹配，去掉括号后缀）
         import re
+
         inventory = self.inventory_dao.get_inventory(qq_id)
         item = None
-        # 清理输入的道具名（去掉括号后缀）
-        clean_name = re.sub(r'\s*[\[（].*?[\]）]\s*$', '', item_name).strip()
+        # 清理输入的道具名（全角转半角，去掉括号后缀，忽略大小写）
+        normalized_name = normalize_punctuation(item_name)
+        clean_name = re.sub(r'\s*[\[（(].*?[\]）)]\s*$', '', normalized_name).strip()
         for inv_item in inventory:
-            # 清理背包中的道具名
-            inv_clean_name = re.sub(r'\s*[\[（].*?[\]）]\s*$', '', inv_item.item_name).strip()
-            if inv_item.item_name == item_name or inv_clean_name == clean_name:
+            # 清理背包中的道具名（也要全角转半角）
+            inv_normalized = normalize_punctuation(inv_item.item_name)
+            inv_clean_name = re.sub(r'\s*[\[（(].*?[\]）)]\s*$', '', inv_normalized).strip()
+            # 忽略大小写比较
+            if inv_normalized.lower() == normalized_name.lower() or inv_clean_name.lower() == clean_name.lower():
                 item = inv_item
                 break
 
@@ -2266,10 +2337,16 @@ class GameEngine:
                     self.state_dao.update_state(state)
 
                 # 应用效果
+                extra_msg = ''
                 if result.effects:
-                    self._apply_content_effects(qq_id, result.effects)
+                    extra_msg = self._apply_content_effects(qq_id, result.effects)
 
-                return GameResult(True, result.message, result.effects)
+                # 组合消息
+                final_message = result.message
+                if extra_msg:
+                    final_message = f"{result.message}\n\n{extra_msg}"
+
+                return GameResult(True, final_message, result.effects)
             else:
                 return GameResult(False, result.message)
         except Exception as e:
@@ -2441,7 +2518,9 @@ class GameEngine:
             # 处理返回的effects
             if result and result.effects:
                 print(f"[触发内容] {qq_id} 效果字典: {result.effects}")
-                self._apply_content_effects(qq_id, result.effects)
+                extra_msg = self._apply_content_effects(qq_id, result.effects)
+                if extra_msg:
+                    messages.append(extra_msg)
 
             if result and result.message:
                 messages.append(result.message)
@@ -2451,13 +2530,17 @@ class GameEngine:
             print(f"[错误] 触发内容时出错: {e}")
             return f"触发内容时出错: {e}"
 
-    def _apply_content_effects(self, qq_id: str, effects: dict):
+    def _apply_content_effects(self, qq_id: str, effects: dict) -> str:
         """应用遭遇/陷阱/道具的效果
 
         Args:
             qq_id: 玩家QQ号
             effects: 效果字典，可能包含各种效果
+
+        Returns:
+            str: 额外的消息（如登顶奖励等），可能为空
         """
+        extra_messages = []
         state = self.state_dao.get_state(qq_id)
 
         # ==================== 回合控制效果 ====================
@@ -2627,7 +2710,9 @@ class GameEngine:
         # 处理直接登顶效果（The Room徽章）
         if 'direct_top_column' in effects:
             column = effects['direct_top_column']
-            self._direct_top_column(qq_id, column)
+            top_msg = self._direct_top_column(qq_id, column)
+            if top_msg:
+                extra_messages.append(top_msg)
 
         # ==================== 道具效果 ====================
 
@@ -2882,21 +2967,30 @@ class GameEngine:
         # 保存状态
         self.state_dao.update_state(state)
 
-    def _direct_top_column(self, qq_id: str, column: int):
+        # 返回额外消息
+        return '\n\n'.join(extra_messages) if extra_messages else ''
+
+    def _direct_top_column(self, qq_id: str, column: int) -> str:
         """直接登顶指定列（The Room徽章效果）
 
         Args:
             qq_id: 玩家QQ号
             column: 要登顶的列号
+
+        Returns:
+            str: 额外的消息（首达、禁止、胜利等）
         """
         import logging
+        from datetime import datetime, timedelta
         from data.board_config import COLUMN_HEIGHTS
+
+        extra_messages = []
 
         # 获取列高度
         column_height = COLUMN_HEIGHTS.get(column)
         if not column_height:
             logging.error(f"[直接登顶] 无效的列号: {column}")
-            return
+            return ""
 
         # 直接在该列顶部放置永久标记
         self.position_dao.add_or_update_position(qq_id, column, column_height, 'permanent')
@@ -2910,7 +3004,50 @@ class GameEngine:
         # 清空该列所有玩家的临时标记
         self.position_dao.clear_all_temp_positions_by_column(column)
 
+        # 给予基础登顶奖励（10积分）
+        base_reward = 10
+        self.player_dao.add_score(qq_id, base_reward)
+        extra_messages.append(f"✦登顶奖励：积分+{base_reward}")
+
+        # 检查是否是首达
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM first_achievements WHERE column_number = ?', (column,))
+        first_record = cursor.fetchone()
+
+        if not first_record:
+            # 首达奖励
+            cursor.execute('INSERT INTO first_achievements (column_number, first_qq_id) VALUES (?, ?)', (column, qq_id))
+            self.conn.commit()
+
+            first_reward = 20
+            self.player_dao.add_score(qq_id, first_reward)
+            self.achievement_dao.add_achievement(qq_id, column, "鹤立oas群", "first_clear")
+
+            extra_messages.append(
+                f"\n🍗 大吉大利，今晚吃鸡\n"
+                f"✦列全体首达奖励\n"
+                f"获得成就：鹤立oas群\n"
+                f"获得奖励：积分+{first_reward}\n"
+                f"获得现实奖励：纪念币一枚（私信官号领取，不包邮）"
+            )
+
+            # 首达后禁止新轮次12小时
+            state = self.state_dao.get_state(qq_id)
+            lockout_time = datetime.now() + timedelta(hours=12)
+            state.lockout_until = lockout_time.isoformat()
+            self.state_dao.update_state(state)
+
+            extra_messages.append(f"\n⏰ 由于全图首次登顶，您将被禁止开启新轮次 12 小时\n解锁时间：{lockout_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # 检查是否获胜（3列登顶）
+        state = self.state_dao.get_state(qq_id)
+        if len(state.topped_columns) >= 3:
+            win_result = self._handle_game_win(qq_id)
+            extra_messages.append(f"\n{win_result.message}")
+
         logging.info(f"[直接登顶] {qq_id} 使用The Room徽章直接登顶列{column}")
+
+        return "\n".join(extra_messages)
 
     def _apply_sweet_talk_effect(self, from_qq: str, target_qq: str):
         """应用花言巧语效果 - 封锁目标玩家当前轮次的列
@@ -3129,8 +3266,18 @@ class GameEngine:
 
     def _handle_game_win(self, qq_id: str) -> GameResult:
         """处理游戏胜利"""
-        # 检查排名
         cursor = self.conn.cursor()
+
+        # 检查该玩家是否已经有排名（一个用户不能同时占有多个排名）
+        cursor.execute('SELECT rank FROM game_rankings WHERE qq_id = ?', (qq_id,))
+        existing_rank = cursor.fetchone()
+        if existing_rank:
+            # 玩家已经有排名，不重复计入
+            return GameResult(True,
+                            f"掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+                            f"🎉 再次通关！您已是第{existing_rank['rank']}个通关的玩家，继续保持！")
+
+        # 计算新排名
         cursor.execute('SELECT COUNT(*) as count FROM game_rankings')
         row = cursor.fetchone()
         rank = row['count'] + 1

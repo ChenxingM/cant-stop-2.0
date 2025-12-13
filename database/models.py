@@ -322,6 +322,10 @@ class ShopItem:
             if player.faction != self.faction_limit:
                 return False, f"该道具仅限{self.faction_limit}使用"
 
+        # 检查是否可购买（price为0表示不可购买）
+        if self.price <= 0:
+            return False, "该道具不可购买"
+
         # 检查积分
         if player.current_score < self.price:
             return False, f"积分不足，需要{self.price}积分"
