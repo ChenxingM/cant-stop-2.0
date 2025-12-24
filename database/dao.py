@@ -867,3 +867,260 @@ class GemPoolDAO:
             ''')
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class CustomCommand:
+    """自定义口令数据类"""
+    command_id: int
+    keyword: str
+    response: str
+    score_reward: int
+    per_player_limit: int
+    enabled: bool
+    created_at: str = None
+
+
+class CustomCommandDAO:
+    """自定义口令数据访问对象"""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def get_all_commands(self) -> List[CustomCommand]:
+        """获取所有口令"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM custom_commands ORDER BY command_id')
+        rows = cursor.fetchall()
+        return [CustomCommand(
+            command_id=row['command_id'],
+            keyword=row['keyword'],
+            response=row['response'],
+            score_reward=row['score_reward'],
+            per_player_limit=row['per_player_limit'],
+            enabled=bool(row['enabled']),
+            created_at=row['created_at']
+        ) for row in rows]
+
+    def get_enabled_commands(self) -> List[CustomCommand]:
+        """获取所有启用的口令"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM custom_commands WHERE enabled = 1 ORDER BY command_id')
+        rows = cursor.fetchall()
+        return [CustomCommand(
+            command_id=row['command_id'],
+            keyword=row['keyword'],
+            response=row['response'],
+            score_reward=row['score_reward'],
+            per_player_limit=row['per_player_limit'],
+            enabled=True,
+            created_at=row['created_at']
+        ) for row in rows]
+
+    def get_command_by_keyword(self, keyword: str) -> Optional[CustomCommand]:
+        """通过关键词获取口令"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM custom_commands WHERE keyword = ?', (keyword,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return CustomCommand(
+            command_id=row['command_id'],
+            keyword=row['keyword'],
+            response=row['response'],
+            score_reward=row['score_reward'],
+            per_player_limit=row['per_player_limit'],
+            enabled=bool(row['enabled']),
+            created_at=row['created_at']
+        )
+
+    def get_command_by_id(self, command_id: int) -> Optional[CustomCommand]:
+        """通过ID获取口令"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM custom_commands WHERE command_id = ?', (command_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return CustomCommand(
+            command_id=row['command_id'],
+            keyword=row['keyword'],
+            response=row['response'],
+            score_reward=row['score_reward'],
+            per_player_limit=row['per_player_limit'],
+            enabled=bool(row['enabled']),
+            created_at=row['created_at']
+        )
+
+    def add_command(self, keyword: str, response: str, score_reward: int = 0,
+                    per_player_limit: int = 1) -> Tuple[bool, str]:
+        """添加口令"""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO custom_commands (keyword, response, score_reward, per_player_limit)
+                VALUES (?, ?, ?, ?)
+            ''', (keyword, response, score_reward, per_player_limit))
+            self.conn.commit()
+            return True, "口令添加成功"
+        except sqlite3.IntegrityError:
+            return False, "关键词已存在"
+        except Exception as e:
+            return False, f"添加失败: {str(e)}"
+
+    def update_command(self, command_id: int, keyword: str, response: str,
+                       score_reward: int, per_player_limit: int) -> Tuple[bool, str]:
+        """更新口令"""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE custom_commands
+                SET keyword = ?, response = ?, score_reward = ?, per_player_limit = ?
+                WHERE command_id = ?
+            ''', (keyword, response, score_reward, per_player_limit, command_id))
+            self.conn.commit()
+            return True, "口令更新成功"
+        except sqlite3.IntegrityError:
+            return False, "关键词已被其他口令使用"
+        except Exception as e:
+            return False, f"更新失败: {str(e)}"
+
+    def delete_command(self, command_id: int) -> bool:
+        """删除口令"""
+        cursor = self.conn.cursor()
+        # 同时删除使用记录
+        cursor.execute('DELETE FROM custom_command_usage WHERE command_id = ?', (command_id,))
+        cursor.execute('DELETE FROM custom_commands WHERE command_id = ?', (command_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def toggle_command(self, command_id: int) -> Tuple[bool, bool]:
+        """切换口令启用状态，返回(是否成功, 新状态)"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT enabled FROM custom_commands WHERE command_id = ?', (command_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False, False
+        new_state = not bool(row['enabled'])
+        cursor.execute('UPDATE custom_commands SET enabled = ? WHERE command_id = ?',
+                       (1 if new_state else 0, command_id))
+        self.conn.commit()
+        return True, new_state
+
+    def get_usage_count(self, qq_id: str, command_id: int) -> int:
+        """获取玩家对某口令的使用次数"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) as count FROM custom_command_usage
+            WHERE qq_id = ? AND command_id = ?
+        ''', (qq_id, command_id))
+        row = cursor.fetchone()
+        return row['count'] if row else 0
+
+    def record_usage(self, qq_id: str, command_id: int):
+        """记录口令使用"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT INTO custom_command_usage (qq_id, command_id)
+            VALUES (?, ?)
+        ''', (qq_id, command_id))
+        self.conn.commit()
+
+    def clear_usage(self, command_id: int):
+        """清空某口令的所有使用记录"""
+        cursor = self.conn.cursor()
+        cursor.execute('DELETE FROM custom_command_usage WHERE command_id = ?', (command_id,))
+        self.conn.commit()
+
+    def import_from_json(self, file_path: str) -> Tuple[int, int, List[str]]:
+        """
+        从 JSON 文件导入口令
+        Returns: (成功数, 跳过数, 错误消息列表)
+        """
+        import json
+        from pathlib import Path
+
+        errors = []
+        success_count = 0
+        skip_count = 0
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return 0, 0, [f"文件不存在: {file_path}"]
+        except json.JSONDecodeError as e:
+            return 0, 0, [f"JSON 解析错误: {str(e)}"]
+
+        commands = data.get('commands', [])
+        for i, cmd in enumerate(commands):
+            keyword = cmd.get('keyword', '').strip()
+            response = cmd.get('response', '').strip()
+            score_reward = cmd.get('score_reward', 0)
+            per_player_limit = cmd.get('per_player_limit', 1)
+            enabled = cmd.get('enabled', True)
+
+            if not keyword or not response:
+                errors.append(f"第 {i+1} 条: 关键词或回复为空，跳过")
+                skip_count += 1
+                continue
+
+            # 检查是否已存在
+            existing = self.get_command_by_keyword(keyword)
+            if existing:
+                # 更新现有口令
+                self.update_command(existing.command_id, keyword, response, score_reward, per_player_limit)
+                # 更新启用状态
+                cursor = self.conn.cursor()
+                cursor.execute('UPDATE custom_commands SET enabled = ? WHERE command_id = ?',
+                               (1 if enabled else 0, existing.command_id))
+                self.conn.commit()
+                skip_count += 1
+            else:
+                # 添加新口令
+                success, msg = self.add_command(keyword, response, score_reward, per_player_limit)
+                if success:
+                    # 设置启用状态
+                    if not enabled:
+                        new_cmd = self.get_command_by_keyword(keyword)
+                        if new_cmd:
+                            cursor = self.conn.cursor()
+                            cursor.execute('UPDATE custom_commands SET enabled = 0 WHERE command_id = ?',
+                                           (new_cmd.command_id,))
+                            self.conn.commit()
+                    success_count += 1
+                else:
+                    errors.append(f"第 {i+1} 条 '{keyword}': {msg}")
+                    skip_count += 1
+
+        return success_count, skip_count, errors
+
+    def export_to_json(self, file_path: str) -> Tuple[bool, str]:
+        """
+        导出所有口令到 JSON 文件
+        Returns: (是否成功, 消息)
+        """
+        import json
+
+        commands = self.get_all_commands()
+        data = {
+            "commands": [
+                {
+                    "keyword": cmd.keyword,
+                    "response": cmd.response,
+                    "score_reward": cmd.score_reward,
+                    "per_player_limit": cmd.per_player_limit,
+                    "enabled": cmd.enabled
+                }
+                for cmd in commands
+            ]
+        }
+
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True, f"成功导出 {len(commands)} 条口令"
+        except Exception as e:
+            return False, f"导出失败: {str(e)}"

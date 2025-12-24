@@ -15,12 +15,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.dao import (
     PlayerDAO, PositionDAO, InventoryDAO, GameStateDAO,
-    ShopDAO, AchievementDAO, DailyLimitDAO
+    ShopDAO, AchievementDAO, DailyLimitDAO, CustomCommandDAO
 )
 from database.models import Player, Position, DAILY_LIMITS, ACHIEVEMENTS
 from data.board_config import BOARD_DATA, COLUMN_HEIGHTS, VALID_COLUMNS
 from engine.content_handler import ContentHandler
-from engine.command_parser import normalize_punctuation
+from engine.command_parser import normalize_punctuation, CommandParser
 
 
 @dataclass
@@ -43,12 +43,58 @@ class GameEngine:
         self.shop_dao = ShopDAO(db_conn)
         self.achievement_dao = AchievementDAO(db_conn)
         self.daily_dao = DailyLimitDAO(db_conn)
+        self.custom_cmd_dao = CustomCommandDAO(db_conn)
         self.content_handler = ContentHandler(
             self.player_dao, self.inventory_dao, self.achievement_dao,
             self.position_dao, self.shop_dao, db_conn
         )
+        # 加载自定义口令到命令解析器
+        self._load_custom_commands()
 
     # ==================== 辅助方法 ====================
+
+    def _load_custom_commands(self):
+        """加载自定义口令到命令解析器"""
+        commands = self.custom_cmd_dao.get_enabled_commands()
+        keywords = [cmd.keyword for cmd in commands]
+        CommandParser.set_custom_commands(keywords)
+
+    def reload_custom_commands(self):
+        """重新加载自定义口令（供外部调用）"""
+        self._load_custom_commands()
+
+    def handle_custom_command(self, qq_id: str, keyword: str) -> GameResult:
+        """处理自定义口令"""
+        # 获取口令配置
+        cmd = self.custom_cmd_dao.get_command_by_keyword(keyword)
+        if not cmd:
+            return GameResult(False, "口令不存在")
+        if not cmd.enabled:
+            return GameResult(False, "口令已禁用")
+
+        # 检查使用次数限制
+        if cmd.per_player_limit > 0:
+            usage_count = self.custom_cmd_dao.get_usage_count(qq_id, cmd.command_id)
+            if usage_count >= cmd.per_player_limit:
+                return GameResult(False, "你已达到此口令的使用上限")
+
+        # 发放积分（如果有）
+        if cmd.score_reward > 0:
+            # 确保玩家已注册
+            player = self.player_dao.get_player(qq_id)
+            if not player:
+                return GameResult(False, "请先注册玩家")
+            self.player_dao.add_score(qq_id, cmd.score_reward)
+
+        # 记录使用
+        self.custom_cmd_dao.record_usage(qq_id, cmd.command_id)
+
+        # 构建回复消息
+        response = cmd.response
+        if cmd.score_reward > 0:
+            response += f"\n获得 {cmd.score_reward} 积分！"
+
+        return GameResult(True, response)
 
     def _match_choice(self, choice: str, available_choices: List[str]) -> Optional[str]:
         """标准化匹配选择项，不区分全角半角标点、引号、大小写
@@ -3302,28 +3348,37 @@ class GameEngine:
                 partner_name = partner.nickname if partner else partner_qq
                 extra_messages.append(f"💍 您与契约对象 {partner_name} 共同通关！获得隐藏成就：产品金婚")
 
-        if rank <= 4:
+        if rank <= 5:
             # 记录排名
             cursor.execute('INSERT INTO game_rankings (rank, qq_id) VALUES (?, ?)', (rank, qq_id))
             self.conn.commit()
 
             # 发放排名奖励
-            rank_rewards = {1: 100, 2: 80, 3: 50, 4: 0}
+            rank_rewards = {1: 100, 2: 80, 3: 50, 4: 0, 5: 0}
             reward = rank_rewards.get(rank, 0)
             if reward > 0:
                 self.player_dao.add_score(qq_id, reward)
 
-            rank_names = {1: "OAS游戏王", 2: "银闪闪", 3: "吉祥三宝", 4: "一步之遥"}
+            rank_names = {1: "OAS游戏王", 2: "银闪闪", 3: "吉祥三宝", 4: "一步之遥", 5: "五福临门"}
             self.achievement_dao.add_achievement(qq_id, rank, rank_names[rank], "first_clear")
 
             # 根据排名生成不同的通关文案
+            real_reward_1_3 = (
+                "获得现实奖励：丑喵团子一只；纪念币一枚；"
+                "企划oc制品套组×1（oc企卡镭射票+打卡图反转片票根组/明信片组+棋子贴纸，包美工）\n"
+                "主线结束后私信官号领取，不包邮"
+            )
+            real_reward_4_5 = (
+                "获得现实奖励：企划oc制品套组×1（oc企卡镭射票+打卡图反转片票根组/明信片组+棋子贴纸，包美工）\n"
+                "主线结束后私信官号领取，不包邮"
+            )
             if rank == 1:
                 result_msg = (
                     "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
                     "★✦恭喜您第一通关游戏✦★\n"
                     f"获得成就：{rank_names[rank]}\n"
                     f"获得奖励：积分+{reward}\n"
-                    "获得现实奖励：丑喵团子一只 纪念币一枚（私信官号领取，不包邮）"
+                    f"{real_reward_1_3}"
                 )
             elif rank == 2:
                 result_msg = (
@@ -3331,7 +3386,7 @@ class GameEngine:
                     "★✦恭喜您第二通关游戏✦★\n"
                     f"获得成就：{rank_names[rank]}\n"
                     f"获得奖励：积分+{reward}\n"
-                    "获得现实奖励：丑喵团子一只 纪念币一枚（私信官号领取，不包邮）"
+                    f"{real_reward_1_3}"
                 )
             elif rank == 3:
                 result_msg = (
@@ -3339,14 +3394,21 @@ class GameEngine:
                     "★✦恭喜您第三通关游戏✦★\n"
                     f"获得成就：{rank_names[rank]}\n"
                     f"获得奖励：积分+{reward}\n"
-                    "获得现实奖励：丑喵团子一只 纪念币一枚（私信官号领取，不包邮）"
+                    f"{real_reward_1_3}"
                 )
-            else:  # rank == 4
+            elif rank == 4:
                 result_msg = (
                     "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
                     "★✦恭喜您第四通关游戏✦★\n"
                     f"获得成就：{rank_names[rank]}\n"
-                    "获得奖励：没有捏～～～"
+                    f"{real_reward_4_5}"
+                )
+            else:  # rank == 5
+                result_msg = (
+                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+                    "★✦恭喜您第五通关游戏✦★\n"
+                    f"获得成就：{rank_names[rank]}\n"
+                    f"{real_reward_4_5}"
                 )
 
             if extra_messages:

@@ -25,7 +25,7 @@ from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush, QCursor
 from database.schema import init_database
 from database.dao import (
     PlayerDAO, PositionDAO, ShopDAO, AchievementDAO,
-    InventoryDAO, GameStateDAO, GemPoolDAO, ContractDAO
+    InventoryDAO, GameStateDAO, GemPoolDAO, ContractDAO, CustomCommandDAO
 )
 from data.board_config import BOARD_DATA, COLUMN_HEIGHTS, VALID_COLUMNS
 from datetime import datetime, timedelta
@@ -358,6 +358,7 @@ class GMWindow(QMainWindow):
         self.state_dao = GameStateDAO(self.db_conn)
         self.gem_dao = GemPoolDAO(self.db_conn)
         self.contract_dao = ContractDAO(self.db_conn)
+        self.custom_cmd_dao = CustomCommandDAO(self.db_conn)
 
         # 当前选中的玩家
         self.selected_qq_id = None
@@ -398,6 +399,10 @@ class GMWindow(QMainWindow):
         # 商店管理选项卡
         self.shop_tab = self._create_shop_tab()
         self.tabs.addTab(self.shop_tab, "🛒 商店管理")
+
+        # 口令管理选项卡
+        self.command_tab = self._create_command_tab()
+        self.tabs.addTab(self.command_tab, "📣 口令管理")
 
         # 系统管理选项卡
         self.system_tab = self._create_system_tab()
@@ -941,6 +946,324 @@ class GMWindow(QMainWindow):
 
         return widget
 
+    def _create_command_tab(self) -> QWidget:
+        """创建口令管理选项卡"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        # 工具栏
+        toolbar = QHBoxLayout()
+
+        add_cmd_btn = QPushButton("➕ 添加口令")
+        add_cmd_btn.clicked.connect(self._add_command_dialog)
+        add_cmd_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        toolbar.addWidget(add_cmd_btn)
+
+        refresh_cmd_btn = QPushButton("🔄 刷新列表")
+        refresh_cmd_btn.clicked.connect(self._refresh_commands)
+        toolbar.addWidget(refresh_cmd_btn)
+
+        toolbar.addStretch()
+
+        import_btn = QPushButton("📥 导入配置")
+        import_btn.clicked.connect(self._import_commands)
+        toolbar.addWidget(import_btn)
+
+        export_btn = QPushButton("📤 导出配置")
+        export_btn.clicked.connect(self._export_commands)
+        toolbar.addWidget(export_btn)
+
+        # 显示配置文件路径提示
+        config_path_label = QLabel("配置文件: data/custom_commands.json")
+        config_path_label.setStyleSheet("color: gray; font-size: 11px;")
+        toolbar.addWidget(config_path_label)
+
+        layout.addLayout(toolbar)
+
+        # 口令表格
+        self.command_table = QTableWidget()
+        self.command_table.setColumnCount(7)
+        self.command_table.setHorizontalHeaderLabels(
+            ["ID", "关键词", "回复消息", "积分奖励", "每人限制", "启用", "操作"]
+        )
+        self.command_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.command_table.setColumnWidth(0, 50)
+        self.command_table.setColumnWidth(3, 80)
+        self.command_table.setColumnWidth(4, 80)
+        self.command_table.setColumnWidth(5, 60)
+        self.command_table.setColumnWidth(6, 150)
+
+        layout.addWidget(self.command_table)
+
+        # 初始加载
+        self._refresh_commands()
+
+        return widget
+
+    def _refresh_commands(self):
+        """刷新口令列表"""
+        commands = self.custom_cmd_dao.get_all_commands()
+        self.command_table.setRowCount(len(commands))
+
+        for row, cmd in enumerate(commands):
+            # ID
+            self.command_table.setItem(row, 0, QTableWidgetItem(str(cmd.command_id)))
+
+            # 关键词
+            self.command_table.setItem(row, 1, QTableWidgetItem(cmd.keyword))
+
+            # 回复消息（截断显示）
+            response_display = cmd.response[:30] + "..." if len(cmd.response) > 30 else cmd.response
+            self.command_table.setItem(row, 2, QTableWidgetItem(response_display))
+
+            # 积分奖励
+            self.command_table.setItem(row, 3, QTableWidgetItem(str(cmd.score_reward)))
+
+            # 每人限制
+            limit_text = "无限" if cmd.per_player_limit == 0 else str(cmd.per_player_limit)
+            self.command_table.setItem(row, 4, QTableWidgetItem(limit_text))
+
+            # 启用状态
+            status_text = "✓" if cmd.enabled else "✗"
+            status_item = QTableWidgetItem(status_text)
+            status_item.setTextAlignment(Qt.AlignCenter)
+            self.command_table.setItem(row, 5, status_item)
+
+            # 操作按钮
+            ops_widget = QWidget()
+            ops_layout = QHBoxLayout(ops_widget)
+            ops_layout.setContentsMargins(2, 2, 2, 2)
+
+            edit_btn = QPushButton("编辑")
+            edit_btn.setFixedWidth(45)
+            edit_btn.clicked.connect(lambda checked, cid=cmd.command_id: self._edit_command_dialog(cid))
+            ops_layout.addWidget(edit_btn)
+
+            toggle_btn = QPushButton("禁用" if cmd.enabled else "启用")
+            toggle_btn.setFixedWidth(45)
+            toggle_btn.clicked.connect(lambda checked, cid=cmd.command_id: self._toggle_command(cid))
+            ops_layout.addWidget(toggle_btn)
+
+            del_btn = QPushButton("删除")
+            del_btn.setFixedWidth(45)
+            del_btn.setStyleSheet("background-color: #f44336; color: white;")
+            del_btn.clicked.connect(lambda checked, cid=cmd.command_id: self._delete_command(cid))
+            ops_layout.addWidget(del_btn)
+
+            self.command_table.setCellWidget(row, 6, ops_widget)
+
+    def _add_command_dialog(self):
+        """添加口令对话框"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("添加口令")
+        dialog.setMinimumWidth(400)
+
+        layout = QVBoxLayout(dialog)
+
+        # 关键词
+        keyword_layout = QHBoxLayout()
+        keyword_layout.addWidget(QLabel("关键词:"))
+        keyword_input = QLineEdit()
+        keyword_input.setPlaceholderText("如：领取圣诞礼物")
+        keyword_layout.addWidget(keyword_input)
+        layout.addLayout(keyword_layout)
+
+        # 回复消息
+        response_layout = QVBoxLayout()
+        response_layout.addWidget(QLabel("回复消息:"))
+        response_input = QTextEdit()
+        response_input.setPlaceholderText("如：恭喜领取成功！")
+        response_input.setMaximumHeight(100)
+        response_layout.addWidget(response_input)
+        layout.addLayout(response_layout)
+
+        # 积分奖励
+        score_layout = QHBoxLayout()
+        score_layout.addWidget(QLabel("积分奖励:"))
+        score_input = QSpinBox()
+        score_input.setRange(0, 10000)
+        score_input.setValue(0)
+        score_layout.addWidget(score_input)
+        layout.addLayout(score_layout)
+
+        # 每人限制
+        limit_layout = QHBoxLayout()
+        limit_layout.addWidget(QLabel("每人限制:"))
+        limit_input = QSpinBox()
+        limit_input.setRange(0, 999)
+        limit_input.setValue(1)
+        limit_input.setSpecialValueText("无限")
+        limit_layout.addWidget(limit_input)
+        limit_layout.addWidget(QLabel("(0=无限)"))
+        layout.addLayout(limit_layout)
+
+        # 按钮
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.Accepted:
+            keyword = keyword_input.text().strip()
+            response = response_input.toPlainText().strip()
+            score = score_input.value()
+            limit = limit_input.value()
+
+            if not keyword:
+                QMessageBox.warning(self, "错误", "关键词不能为空")
+                return
+            if not response:
+                QMessageBox.warning(self, "错误", "回复消息不能为空")
+                return
+
+            success, msg = self.custom_cmd_dao.add_command(keyword, response, score, limit)
+            if success:
+                QMessageBox.information(self, "成功", msg)
+                self._refresh_commands()
+                self._log(f"添加口令: {keyword}")
+            else:
+                QMessageBox.warning(self, "错误", msg)
+
+    def _edit_command_dialog(self, command_id: int):
+        """编辑口令对话框"""
+        cmd = self.custom_cmd_dao.get_command_by_id(command_id)
+        if not cmd:
+            QMessageBox.warning(self, "错误", "口令不存在")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("编辑口令")
+        dialog.setMinimumWidth(400)
+
+        layout = QVBoxLayout(dialog)
+
+        # 关键词
+        keyword_layout = QHBoxLayout()
+        keyword_layout.addWidget(QLabel("关键词:"))
+        keyword_input = QLineEdit()
+        keyword_input.setText(cmd.keyword)
+        keyword_layout.addWidget(keyword_input)
+        layout.addLayout(keyword_layout)
+
+        # 回复消息
+        response_layout = QVBoxLayout()
+        response_layout.addWidget(QLabel("回复消息:"))
+        response_input = QTextEdit()
+        response_input.setText(cmd.response)
+        response_input.setMaximumHeight(100)
+        response_layout.addWidget(response_input)
+        layout.addLayout(response_layout)
+
+        # 积分奖励
+        score_layout = QHBoxLayout()
+        score_layout.addWidget(QLabel("积分奖励:"))
+        score_input = QSpinBox()
+        score_input.setRange(0, 10000)
+        score_input.setValue(cmd.score_reward)
+        score_layout.addWidget(score_input)
+        layout.addLayout(score_layout)
+
+        # 每人限制
+        limit_layout = QHBoxLayout()
+        limit_layout.addWidget(QLabel("每人限制:"))
+        limit_input = QSpinBox()
+        limit_input.setRange(0, 999)
+        limit_input.setValue(cmd.per_player_limit)
+        limit_input.setSpecialValueText("无限")
+        limit_layout.addWidget(limit_input)
+        limit_layout.addWidget(QLabel("(0=无限)"))
+        layout.addLayout(limit_layout)
+
+        # 按钮
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.Accepted:
+            keyword = keyword_input.text().strip()
+            response = response_input.toPlainText().strip()
+            score = score_input.value()
+            limit = limit_input.value()
+
+            if not keyword:
+                QMessageBox.warning(self, "错误", "关键词不能为空")
+                return
+            if not response:
+                QMessageBox.warning(self, "错误", "回复消息不能为空")
+                return
+
+            success, msg = self.custom_cmd_dao.update_command(command_id, keyword, response, score, limit)
+            if success:
+                QMessageBox.information(self, "成功", msg)
+                self._refresh_commands()
+                self._log(f"编辑口令: {keyword}")
+            else:
+                QMessageBox.warning(self, "错误", msg)
+
+    def _toggle_command(self, command_id: int):
+        """切换口令启用状态"""
+        success, new_state = self.custom_cmd_dao.toggle_command(command_id)
+        if success:
+            status = "启用" if new_state else "禁用"
+            self._refresh_commands()
+            self._log(f"口令ID {command_id} 已{status}")
+        else:
+            QMessageBox.warning(self, "错误", "操作失败")
+
+    def _delete_command(self, command_id: int):
+        """删除口令"""
+        reply = QMessageBox.question(
+            self, "确认删除",
+            "确定要删除这个口令吗？\n删除后使用记录也会被清除。",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            if self.custom_cmd_dao.delete_command(command_id):
+                self._refresh_commands()
+                self._log(f"删除口令ID: {command_id}")
+            else:
+                QMessageBox.warning(self, "错误", "删除失败")
+
+    def _import_commands(self):
+        """从配置文件导入口令"""
+        from pathlib import Path
+        config_path = Path(__file__).parent.parent / "data" / "custom_commands.json"
+
+        if not config_path.exists():
+            QMessageBox.warning(self, "错误", f"配置文件不存在:\n{config_path}")
+            return
+
+        reply = QMessageBox.question(
+            self, "确认导入",
+            f"从以下文件导入口令:\n{config_path}\n\n已存在的口令会被更新，新口令会被添加。",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            success, skip, errors = self.custom_cmd_dao.import_from_json(str(config_path))
+            self._refresh_commands()
+
+            msg = f"导入完成！\n新增: {success} 条\n更新/跳过: {skip} 条"
+            if errors:
+                msg += f"\n\n错误:\n" + "\n".join(errors[:5])
+                if len(errors) > 5:
+                    msg += f"\n... 还有 {len(errors) - 5} 条错误"
+
+            QMessageBox.information(self, "导入结果", msg)
+            self._log(f"导入口令: 新增 {success}, 跳过 {skip}")
+
+    def _export_commands(self):
+        """导出口令到配置文件"""
+        from pathlib import Path
+        config_path = Path(__file__).parent.parent / "data" / "custom_commands.json"
+
+        success, msg = self.custom_cmd_dao.export_to_json(str(config_path))
+        if success:
+            QMessageBox.information(self, "导出成功", f"{msg}\n\n文件位置:\n{config_path}")
+            self._log(f"导出口令配置到 {config_path}")
+        else:
+            QMessageBox.warning(self, "导出失败", msg)
+
     def _create_system_tab(self) -> QWidget:
         """创建系统管理选项卡"""
         widget = QWidget()
@@ -991,6 +1314,11 @@ class GMWindow(QMainWindow):
 
         ops_group = QGroupBox("⚠️ 危险操作")
         ops_layout = QVBoxLayout()
+
+        clear_board_btn = QPushButton("🧹 清除棋盘 (保留玩家和积分)")
+        clear_board_btn.clicked.connect(self._clear_board)
+        clear_board_btn.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+        ops_layout.addWidget(clear_board_btn)
 
         reset_btn = QPushButton("🗑️ 重置游戏 (清除所有数据)")
         reset_btn.clicked.connect(self._reset_game)
@@ -1879,6 +2207,21 @@ QQ号: {player.qq_id}
             self.refresh_shop()
 
     # ==================== 系统操作 ====================
+
+    def _clear_board(self):
+        """清除棋盘（保留玩家和积分）"""
+        reply = QMessageBox.warning(
+            self, "⚠️ 清除棋盘",
+            "确定要清除棋盘吗？\n\n将清除：\n• 所有棋子位置\n• 游戏状态\n• 首达记录\n• 宝石池沼\n\n将保留：\n• 玩家信息\n• 积分\n• 背包道具\n• 成就\n\n此操作不可撤销！",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            from database.schema import DatabaseSchema
+            DatabaseSchema.clear_board(self.db_conn)
+            self._log("棋盘已清除（保留玩家和积分）")
+            QMessageBox.information(self, "成功", "棋盘已清除，玩家信息和积分已保留")
+            self.refresh_all()
 
     def _reset_game(self):
         """重置游戏"""

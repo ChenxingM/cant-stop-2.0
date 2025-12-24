@@ -66,6 +66,26 @@ class Command:
 class CommandParser:
     """指令解析器"""
 
+    # 自定义口令关键词列表（精确匹配）
+    custom_commands: List[str] = []
+
+    @classmethod
+    def set_custom_commands(cls, keywords: List[str]):
+        """设置自定义口令关键词列表"""
+        cls.custom_commands = keywords
+
+    @classmethod
+    def add_custom_command(cls, keyword: str):
+        """添加单个自定义口令关键词"""
+        if keyword not in cls.custom_commands:
+            cls.custom_commands.append(keyword)
+
+    @classmethod
+    def remove_custom_command(cls, keyword: str):
+        """移除单个自定义口令关键词"""
+        if keyword in cls.custom_commands:
+            cls.custom_commands.remove(keyword)
+
     # 指令模式定义
     PATTERNS = {
         # 基础指令
@@ -153,6 +173,10 @@ class CommandParser:
         text = text.strip()
         # 统一全角标点为半角标点
         text = normalize_punctuation(text)
+
+        # 优先检查自定义口令（精确匹配）
+        if text in cls.custom_commands:
+            return Command(type='custom_command', params={'keyword': text}, raw_text=text)
 
         # 尝试匹配各种指令模式
         for cmd_type, pattern in cls.PATTERNS.items():
@@ -427,6 +451,7 @@ COMMAND_HANDLERS = {
     'claim_mainline': 'claim_mainline',
     'add_timed_checkin': 'add_timed_checkin',
     'view_timed_checkins': 'view_timed_checkins',
+    'custom_command': 'handle_custom_command',
 }
 
 

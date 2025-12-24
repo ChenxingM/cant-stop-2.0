@@ -394,6 +394,7 @@ ACHIEVEMENTS = {
     "first_clear_2": {"name": "银闪闪", "desc": "第二个通关游戏", "reward_score": 80},
     "first_clear_3": {"name": "吉祥三宝", "desc": "第三个通关游戏", "reward_score": 50},
     "first_clear_4": {"name": "一步之遥", "desc": "第四个通关游戏", "reward_score": 0},
+    "first_clear_5": {"name": "五福临门", "desc": "第五个通关游戏", "reward_score": 0},
     "first_column": {"name": "鹤立oas群", "desc": "首次在某列登顶", "reward_score": 20},
 
     # 隐藏成就
