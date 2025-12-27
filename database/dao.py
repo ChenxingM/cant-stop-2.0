@@ -354,6 +354,33 @@ class InventoryDAO:
         self.conn.commit()
         return True
 
+    def remove_item_by_name(self, qq_id: str, item_name: str) -> bool:
+        """根据道具名称移除物品，返回是否成功"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT id, quantity FROM player_inventory
+            WHERE qq_id = ? AND item_name = ?
+        ''', (qq_id, item_name))
+        row = cursor.fetchone()
+
+        if not row:
+            return False
+
+        if row['quantity'] > 1:
+            cursor.execute('''
+                UPDATE player_inventory
+                SET quantity = quantity - 1
+                WHERE id = ?
+            ''', (row['id'],))
+        else:
+            cursor.execute('''
+                DELETE FROM player_inventory
+                WHERE id = ?
+            ''', (row['id'],))
+
+        self.conn.commit()
+        return True
+
     def get_inventory(self, qq_id: str) -> List[InventoryItem]:
         """获取背包物品"""
         cursor = self.conn.cursor()
@@ -668,6 +695,23 @@ class AchievementDAO:
             achievement_type=row['achievement_type'],
             obtained_at=row['obtained_at']
         ) for row in rows]
+
+    def remove_achievement(self, qq_id: str, achievement_name: str) -> bool:
+        """移除成就，返回是否成功"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) as count FROM player_achievements
+            WHERE qq_id = ? AND achievement_name = ?
+        ''', (qq_id, achievement_name))
+        if cursor.fetchone()['count'] == 0:
+            return False
+
+        cursor.execute('''
+            DELETE FROM player_achievements
+            WHERE qq_id = ? AND achievement_name = ?
+        ''', (qq_id, achievement_name))
+        self.conn.commit()
+        return True
 
 
 class DailyLimitDAO:

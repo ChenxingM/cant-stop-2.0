@@ -656,10 +656,18 @@ class GMWindow(QMainWindow):
         self.item_quantity_input.setValue(1)
         item_layout.addWidget(self.item_quantity_input, 3, 1)
 
+        item_btn_layout = QHBoxLayout()
         give_item_btn = QPushButton("派发道具")
         give_item_btn.clicked.connect(self._give_item)
         give_item_btn.setStyleSheet("background-color: #9C27B0; color: white;")
-        item_layout.addWidget(give_item_btn, 4, 0, 1, 2)
+        item_btn_layout.addWidget(give_item_btn)
+
+        remove_item_btn = QPushButton("删除道具")
+        remove_item_btn.clicked.connect(self._remove_item)
+        remove_item_btn.setStyleSheet("background-color: #f44336; color: white;")
+        item_btn_layout.addWidget(remove_item_btn)
+
+        item_layout.addLayout(item_btn_layout, 4, 0, 1, 2)
 
         item_group.setLayout(item_layout)
         scroll_layout.addWidget(item_group)
@@ -679,10 +687,18 @@ class GMWindow(QMainWindow):
         self.achievement_name_input.setPlaceholderText("留空则使用上方选择")
         achievement_layout.addWidget(self.achievement_name_input, 1, 1)
 
+        achievement_btn_layout = QHBoxLayout()
         give_achievement_btn = QPushButton("派发成就")
         give_achievement_btn.clicked.connect(self._give_achievement)
         give_achievement_btn.setStyleSheet("background-color: #FF9800; color: white;")
-        achievement_layout.addWidget(give_achievement_btn, 2, 0, 1, 2)
+        achievement_btn_layout.addWidget(give_achievement_btn)
+
+        remove_achievement_btn = QPushButton("删除成就")
+        remove_achievement_btn.clicked.connect(self._remove_achievement)
+        remove_achievement_btn.setStyleSheet("background-color: #f44336; color: white;")
+        achievement_btn_layout.addWidget(remove_achievement_btn)
+
+        achievement_layout.addLayout(achievement_btn_layout, 2, 0, 1, 2)
 
         achievement_group.setLayout(achievement_layout)
         scroll_layout.addWidget(achievement_group)
@@ -1952,6 +1968,44 @@ QQ号: {player.qq_id}
         except Exception as e:
             QMessageBox.critical(self, "错误", f"派发失败: {str(e)}")
 
+    def _remove_item(self):
+        """删除道具"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        # 检查是否使用自定义道具名
+        custom_name = self.custom_item_input.text().strip()
+        if custom_name:
+            item_name = custom_name
+        else:
+            item_data = self.item_combo.currentData()
+            if not item_data:
+                QMessageBox.warning(self, "警告", "请选择一个道具或输入自定义道具名称")
+                return
+            _, item_name, _ = item_data
+
+        quantity = self.item_quantity_input.value()
+
+        try:
+            removed = 0
+            for _ in range(quantity):
+                if self.inventory_dao.remove_item_by_name(self.selected_qq_id, item_name):
+                    removed += 1
+                else:
+                    break
+
+            player = self.player_dao.get_player(self.selected_qq_id)
+            if removed > 0:
+                self._log(f"从 {player.nickname} 删除 {removed}个 [{item_name}]")
+                QMessageBox.information(self, "成功", f"已删除 {removed}个 [{item_name}]")
+                self.custom_item_input.clear()
+            else:
+                QMessageBox.warning(self, "警告", f"玩家没有道具 [{item_name}]")
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"删除失败: {str(e)}")
+
     def _init_item_combo(self):
         """初始化道具下拉框"""
         self.item_combo.clear()
@@ -2051,6 +2105,37 @@ QQ号: {player.qq_id}
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"派发失败: {str(e)}")
+
+    def _remove_achievement(self):
+        """删除成就"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        custom_name = self.achievement_name_input.text().strip()
+        if custom_name:
+            achievement_name = custom_name
+        else:
+            combo_data = self.achievement_combo.currentData()
+            if not combo_data:
+                QMessageBox.warning(self, "警告", "请选择一个有效的成就或输入成就名称")
+                return
+            achievement_name, _ = combo_data
+
+        try:
+            success = self.achievement_dao.remove_achievement(self.selected_qq_id, achievement_name)
+
+            if not success:
+                QMessageBox.warning(self, "警告", f"该玩家没有成就【{achievement_name}】")
+                return
+
+            player = self.player_dao.get_player(self.selected_qq_id)
+            self._log(f"从 {player.nickname} 删除成就【{achievement_name}】")
+            QMessageBox.information(self, "成功", f"已删除成就【{achievement_name}】")
+            self.achievement_name_input.clear()
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"删除失败: {str(e)}")
 
     # ==================== 游戏控制操作 ====================
 
