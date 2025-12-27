@@ -143,28 +143,53 @@ class QQBot:
             await self.session.close()
 
     async def _auto_backup_database(self):
-        """每10秒自动备份数据库"""
+        """每10秒自动备份数据库，保留最近24小时的备份"""
         import sqlite3
+        import time
 
         backup_dir = get_base_path() / "data" / "db_backup"
         backup_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"数据库自动备份已启动，备份目录: {backup_dir}")
 
+        last_timestamped_backup = 0
+        backup_interval = 60  # 每60秒创建一个带时间戳的备份
+        retention_seconds = 24 * 60 * 60  # 保留24小时
+
         while self.running:
             try:
-                await asyncio.sleep(10)
+                await asyncio.sleep(60)
 
                 if not self.running:
                     break
 
-                # 生成备份文件名（保留最近的几个备份）
-                backup_file = backup_dir / "game_latest.db"
+                now = time.time()
 
-                # 使用 SQLite 备份 API
-                backup_conn = sqlite3.connect(str(backup_file))
+                # 每10秒更新最新备份
+                latest_file = backup_dir / "game_latest.db"
+                backup_conn = sqlite3.connect(str(latest_file))
                 self.db_conn.backup(backup_conn)
                 backup_conn.close()
+
+                # 每分钟创建带时间戳的备份
+                if now - last_timestamped_backup >= backup_interval:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    timestamped_file = backup_dir / f"game_{timestamp}.db"
+                    backup_conn = sqlite3.connect(str(timestamped_file))
+                    self.db_conn.backup(backup_conn)
+                    backup_conn.close()
+                    last_timestamped_backup = now
+
+                    # 清理超过24小时的旧备份
+                    for old_file in backup_dir.glob("game_*.db"):
+                        if old_file.name == "game_latest.db":
+                            continue
+                        try:
+                            file_age = now - old_file.stat().st_mtime
+                            if file_age > retention_seconds:
+                                old_file.unlink()
+                        except Exception:
+                            pass
 
             except asyncio.CancelledError:
                 break
