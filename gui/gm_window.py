@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QLineEdit, QGroupBox, QGridLayout, QMessageBox,
     QHeaderView, QScrollArea, QFrame, QSplitter, QComboBox,
     QSpinBox, QCheckBox, QToolTip, QDialog, QDialogButtonBox,
-    QListWidget, QListWidgetItem, QProgressBar
+    QListWidget, QListWidgetItem, QProgressBar, QFileDialog
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSize, QPoint, QRect
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush, QCursor
