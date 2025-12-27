@@ -5,5 +5,5 @@
 """
 
 VERSION = "20251227_003"
-AUTHOR = "Your Name"
+AUTHOR = "千石まよひ"
 PROJECT_NAME = "贪骰无厌 2.0 (Can't Stop)"
