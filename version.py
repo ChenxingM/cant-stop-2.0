@@ -4,6 +4,6 @@
 每次 build 时自动更新
 """
 
-VERSION = "20251227_005"
+VERSION = "20251228"
 AUTHOR = "千石まよひ"
 PROJECT_NAME = "贪骰无厌 (Can't Stop)"
