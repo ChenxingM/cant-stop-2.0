@@ -640,16 +640,26 @@ class GMWindow(QMainWindow):
         self._init_item_combo()
         item_layout.addWidget(self.item_combo, 0, 1)
 
-        item_layout.addWidget(QLabel("数量:"), 1, 0)
+        item_layout.addWidget(QLabel("自定义:"), 1, 0)
+        self.custom_item_input = QLineEdit()
+        self.custom_item_input.setPlaceholderText("留空则使用上方选择")
+        item_layout.addWidget(self.custom_item_input, 1, 1)
+
+        item_layout.addWidget(QLabel("类型:"), 2, 0)
+        self.custom_item_type_combo = QComboBox()
+        self.custom_item_type_combo.addItems(["item", "trap", "encounter", "special"])
+        item_layout.addWidget(self.custom_item_type_combo, 2, 1)
+
+        item_layout.addWidget(QLabel("数量:"), 3, 0)
         self.item_quantity_input = QSpinBox()
         self.item_quantity_input.setRange(1, 99)
         self.item_quantity_input.setValue(1)
-        item_layout.addWidget(self.item_quantity_input, 1, 1)
+        item_layout.addWidget(self.item_quantity_input, 3, 1)
 
         give_item_btn = QPushButton("派发道具")
         give_item_btn.clicked.connect(self._give_item)
         give_item_btn.setStyleSheet("background-color: #9C27B0; color: white;")
-        item_layout.addWidget(give_item_btn, 2, 0, 1, 2)
+        item_layout.addWidget(give_item_btn, 4, 0, 1, 2)
 
         item_group.setLayout(item_layout)
         scroll_layout.addWidget(item_group)
@@ -1912,12 +1922,21 @@ QQ号: {player.qq_id}
             QMessageBox.warning(self, "警告", "请先选择一个玩家")
             return
 
-        item_data = self.item_combo.currentData()
-        if not item_data:
-            QMessageBox.warning(self, "警告", "请选择一个道具")
-            return
+        # 检查是否使用自定义道具
+        custom_name = self.custom_item_input.text().strip()
+        if custom_name:
+            # 使用自定义道具
+            item_id = f"custom_{custom_name}"
+            item_name = custom_name
+            item_type = self.custom_item_type_combo.currentText()
+        else:
+            # 使用下拉框选择的道具
+            item_data = self.item_combo.currentData()
+            if not item_data:
+                QMessageBox.warning(self, "警告", "请选择一个道具或输入自定义道具名称")
+                return
+            item_id, item_name, item_type = item_data
 
-        item_id, item_name, item_type = item_data
         quantity = self.item_quantity_input.value()
 
         try:
@@ -1927,7 +1946,8 @@ QQ号: {player.qq_id}
             player = self.player_dao.get_player(self.selected_qq_id)
             self._log(f"向 {player.nickname} 派发 {quantity}个 [{item_name}]")
             QMessageBox.information(self, "成功", f"已派发 {quantity}个 [{item_name}]")
-            self._show_player_detail(self.selected_qq_id)
+            # 清空自定义输入
+            self.custom_item_input.clear()
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"派发失败: {str(e)}")
