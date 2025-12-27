@@ -106,16 +106,21 @@ class QQBot:
 
     def __init__(self, config: BotConfig, db_path: str = "data/game.db"):
         self.config = config
+        self.db_path = db_path
         self.db_conn = init_database(db_path)
         self.game_engine = GameEngine(self.db_conn)
         self.session: Optional[aiohttp.ClientSession] = None
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.running = False
+        self.backup_task = None
 
     async def start(self):
         """启动机器人"""
         self.session = aiohttp.ClientSession()
         self.running = True
+
+        # 启动数据库自动备份任务
+        self.backup_task = asyncio.create_task(self._auto_backup_database())
 
         try:
             await self._connect_websocket()
@@ -126,10 +131,45 @@ class QQBot:
     async def stop(self):
         """停止机器人"""
         self.running = False
+        if self.backup_task:
+            self.backup_task.cancel()
+            try:
+                await self.backup_task
+            except asyncio.CancelledError:
+                pass
         if self.ws:
             await self.ws.close()
         if self.session:
             await self.session.close()
+
+    async def _auto_backup_database(self):
+        """每10秒自动备份数据库"""
+        import sqlite3
+
+        backup_dir = get_base_path() / "data" / "db_backup"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"数据库自动备份已启动，备份目录: {backup_dir}")
+
+        while self.running:
+            try:
+                await asyncio.sleep(10)
+
+                if not self.running:
+                    break
+
+                # 生成备份文件名（保留最近的几个备份）
+                backup_file = backup_dir / "game_latest.db"
+
+                # 使用 SQLite 备份 API
+                backup_conn = sqlite3.connect(str(backup_file))
+                self.db_conn.backup(backup_conn)
+                backup_conn.close()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"数据库备份失败: {e}")
 
     async def _connect_websocket(self):
         """连接WebSocket（支持重连）"""
