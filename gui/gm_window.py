@@ -1908,16 +1908,16 @@ QQ号: {player.qq_id}
             if score_type == "当前积分":
                 new_score = player.current_score + amount if is_add else amount
                 cursor.execute("UPDATE players SET current_score = ? WHERE qq_id = ?",
-                             (max(0, new_score), self.selected_qq_id))
+                             (new_score, self.selected_qq_id))
             elif score_type == "总积分":
                 new_score = player.total_score + amount if is_add else amount
                 cursor.execute("UPDATE players SET total_score = ? WHERE qq_id = ?",
-                             (max(0, new_score), self.selected_qq_id))
+                             (new_score, self.selected_qq_id))
             else:
                 new_current = player.current_score + amount if is_add else amount
                 new_total = player.total_score + amount if is_add else amount
                 cursor.execute("UPDATE players SET current_score = ?, total_score = ? WHERE qq_id = ?",
-                             (max(0, new_current), max(0, new_total), self.selected_qq_id))
+                             (new_current, new_total, self.selected_qq_id))
 
             self.db_conn.commit()
             self._log(f"修改 {player.nickname} 积分: {'+' if is_add else '='}{amount}")
