@@ -14,3 +14,9 @@ logs/
 dist/
 
 nul
+
+data/db_backup/
+
+*.db-wal
+
+*.db-shm
