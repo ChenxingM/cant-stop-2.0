@@ -1,0 +1,11 @@
+{
+  "commands": [
+    {
+      "keyword": "领取圣诞礼物",
+      "response": "恭喜领取圣诞礼物成功！您的积分 +10，祝你圣诞快乐！",
+      "score_reward": 10,
+      "per_player_limit": 1,
+      "enabled": true
+    }
+  ]
+}

@@ -440,6 +440,31 @@ class DatabaseSchema:
         )
         ''')
 
+        # ==================== 自定义口令表 ====================
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS custom_commands (
+            command_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT UNIQUE NOT NULL,
+            response TEXT NOT NULL,
+            score_reward INTEGER DEFAULT 0,
+            per_player_limit INTEGER DEFAULT 1,
+            enabled INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+
+        # ==================== 自定义口令使用记录表 ====================
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS custom_command_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            qq_id TEXT NOT NULL,
+            command_id INTEGER NOT NULL,
+            used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (qq_id) REFERENCES players(qq_id),
+            FOREIGN KEY (command_id) REFERENCES custom_commands(command_id)
+        )
+        ''')
+
         conn.commit()
 
     @staticmethod
@@ -513,6 +538,80 @@ class DatabaseSchema:
             cursor.execute('''
                 UPDATE shop_items SET description = ?, player_limit = ? WHERE item_id = ?
             ''', (description, player_limit, item_id))
+
+        conn.commit()
+
+    @staticmethod
+    def clear_board(conn: sqlite3.Connection):
+        """清除棋盘（只清除棋子位置和游戏状态，保留玩家信息和积分）"""
+        cursor = conn.cursor()
+
+        # 清除所有棋子位置
+        cursor.execute('DELETE FROM player_positions')
+
+        # 清除宝石池沼
+        cursor.execute('DELETE FROM gem_pools')
+
+        # 清除首达记录
+        cursor.execute('DELETE FROM first_achievements')
+
+        # 重置游戏状态（保留记录但重置所有字段）
+        cursor.execute('''
+            UPDATE game_state SET
+                current_round_active = 0,
+                can_start_new_round = 1,
+                temp_markers_used = 0,
+                dice_history = NULL,
+                last_dice_result = NULL,
+                topped_columns = NULL,
+                skipped_rounds = 0,
+                pending_encounter = NULL,
+                pending_encounters = NULL,
+                extra_d6_check_six = 0,
+                next_dice_fixed = NULL,
+                next_dice_count = NULL,
+                next_dice_groups = NULL,
+                forced_remaining_rounds = 0,
+                odd_even_check_active = 0,
+                math_check_active = 0,
+                lockout_until = NULL,
+                pending_trap_choice = NULL,
+                trap_immunity_cost = NULL,
+                trap_immunity_draw = 0,
+                trap_immunity_count = 0,
+                requires_drawing = 0,
+                sweet_talk_blocked = NULL,
+                allow_reroll = 0,
+                reroll_on_one = 0,
+                reroll_on_six = 0,
+                all_dice_modifier = 0,
+                forced_rolls = NULL,
+                partial_forced_rolls = NULL,
+                allow_retry_on_fail = 0,
+                next_purchase_half = 0,
+                cost_reduction = 0,
+                last_used_item_id = NULL,
+                immune_next_trap = 0,
+                free_rounds = 0,
+                next_roll_double_cost = 0,
+                change_one_dice_available = 0,
+                use_last_dice_available = 0,
+                frozen_columns = NULL,
+                must_draw_double = 0,
+                force_end_until_draw = 0,
+                next_dice_modify_any = 0,
+                next_dice_add_3_any = 0,
+                disabled_columns_this_round = NULL,
+                pending_duel = NULL,
+                pending_timed_checkins = NULL,
+                has_red_rose = 0,
+                has_blue_rose_from = NULL,
+                yellow_rose_target = NULL,
+                force_reroll_next_move = 0
+        ''')
+
+        # 清除地图内容触发记录
+        cursor.execute('DELETE FROM content_triggers')
 
         conn.commit()
 
