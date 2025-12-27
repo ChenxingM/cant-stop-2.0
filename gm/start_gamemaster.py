@@ -8,13 +8,16 @@ import sys
 import json
 from pathlib import Path
 
+# 项目根目录
+PROJECT_ROOT = Path(__file__).parent.parent
+
 # 添加项目路径
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def load_config():
     """加载配置"""
-    config_file = Path(__file__).parent / "config.json"
+    config_file = PROJECT_ROOT / "config.json"
     if config_file.exists():
         with open(config_file, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -24,6 +27,10 @@ def load_config():
 if __name__ == "__main__":
     config = load_config()
     db_path = config.get('database', {}).get('path', 'data/game.db')
+
+    # 确保数据库路径是绝对路径
+    if not Path(db_path).is_absolute():
+        db_path = str(PROJECT_ROOT / db_path)
     try:
         try:
             from PySide6.QtWidgets import QApplication
