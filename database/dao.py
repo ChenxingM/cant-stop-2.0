@@ -68,6 +68,24 @@ class PlayerDAO:
         ''', (faction, qq_id))
         self.conn.commit()
 
+    def delete_player(self, qq_id: str) -> bool:
+        """删除玩家及其所有相关数据"""
+        cursor = self.conn.cursor()
+        try:
+            # 删除玩家相关的所有数据
+            cursor.execute('DELETE FROM game_state WHERE qq_id = ?', (qq_id,))
+            cursor.execute('DELETE FROM positions WHERE qq_id = ?', (qq_id,))
+            cursor.execute('DELETE FROM inventory WHERE qq_id = ?', (qq_id,))
+            cursor.execute('DELETE FROM achievements WHERE qq_id = ?', (qq_id,))
+            cursor.execute('DELETE FROM daily_limits WHERE qq_id = ?', (qq_id,))
+            cursor.execute('DELETE FROM contracts WHERE qq_id1 = ? OR qq_id2 = ?', (qq_id, qq_id))
+            cursor.execute('DELETE FROM players WHERE qq_id = ?', (qq_id,))
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            return False
+
     def add_score(self, qq_id: str, amount: int):
         """增加积分"""
         cursor = self.conn.cursor()

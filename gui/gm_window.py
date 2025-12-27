@@ -496,11 +496,16 @@ class GMWindow(QMainWindow):
         self.register_nickname_input.setPlaceholderText("输入昵称")
         register_layout.addWidget(self.register_nickname_input, 1, 1)
 
-        register_layout.addWidget(QLabel("初始积分:"), 2, 0)
+        register_layout.addWidget(QLabel("阵营:"), 2, 0)
+        self.register_faction_combo = QComboBox()
+        self.register_faction_combo.addItems(["未选择", "收养人", "Aeonreth"])
+        register_layout.addWidget(self.register_faction_combo, 2, 1)
+
+        register_layout.addWidget(QLabel("初始积分:"), 3, 0)
         self.register_score_input = QSpinBox()
         self.register_score_input.setRange(0, 99999)
         self.register_score_input.setValue(0)
-        register_layout.addWidget(self.register_score_input, 2, 1)
+        register_layout.addWidget(self.register_score_input, 3, 1)
 
         register_btn_layout = QHBoxLayout()
         register_btn = QPushButton("注册玩家")
@@ -513,7 +518,12 @@ class GMWindow(QMainWindow):
         import_csv_btn.setStyleSheet("background-color: #2196F3; color: white;")
         register_btn_layout.addWidget(import_csv_btn)
 
-        register_layout.addLayout(register_btn_layout, 3, 0, 1, 2)
+        delete_btn = QPushButton("删除玩家")
+        delete_btn.clicked.connect(self._delete_player)
+        delete_btn.setStyleSheet("background-color: #f44336; color: white;")
+        register_btn_layout.addWidget(delete_btn)
+
+        register_layout.addLayout(register_btn_layout, 4, 0, 1, 2)
 
         register_group.setLayout(register_layout)
         left_layout.addWidget(register_group)
@@ -1428,6 +1438,7 @@ class GMWindow(QMainWindow):
         """手动注册玩家"""
         qq_id = self.register_qq_input.text().strip()
         nickname = self.register_nickname_input.text().strip()
+        faction = self.register_faction_combo.currentText()
         initial_score = self.register_score_input.value()
 
         if not qq_id:
@@ -1452,21 +1463,57 @@ class GMWindow(QMainWindow):
         # 注册玩家
         player = self.player_dao.create_player(qq_id, nickname)
         if player:
+            # 设置阵营
+            if faction and faction != "未选择":
+                self.player_dao.update_faction(qq_id, faction)
             # 设置初始积分
             if initial_score > 0:
                 self.player_dao.add_score(qq_id, initial_score)
-            QMessageBox.information(self, "成功", f"已注册玩家: {nickname} ({qq_id})\n初始积分: {initial_score}")
+            faction_text = faction if faction != "未选择" else "未选择"
+            QMessageBox.information(self, "成功", f"已注册玩家: {nickname} ({qq_id})\n阵营: {faction_text}\n初始积分: {initial_score}")
             self.register_qq_input.clear()
             self.register_nickname_input.clear()
+            self.register_faction_combo.setCurrentIndex(0)
             self.register_score_input.setValue(0)
             self._refresh_players()
         else:
             QMessageBox.warning(self, "错误", "注册失败")
 
+    def _delete_player(self):
+        """删除选中的玩家"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "错误", "请先选择要删除的玩家")
+            return
+
+        player = self.player_dao.get_player(self.selected_qq_id)
+        if not player:
+            QMessageBox.warning(self, "错误", "玩家不存在")
+            return
+
+        # 确认删除
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            f"确定要删除玩家 {player.nickname} ({player.qq_id}) 吗？\n\n此操作将删除该玩家的所有数据，包括:\n- 积分和成就\n- 背包物品\n- 位置标记\n- 契约关系\n\n此操作不可撤销！",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            if self.player_dao.delete_player(self.selected_qq_id):
+                QMessageBox.information(self, "成功", f"已删除玩家: {player.nickname} ({player.qq_id})")
+                self.selected_qq_id = None
+                self._refresh_players()
+                self.player_detail.clear()
+                self.progress_display.clear()
+                self.control_status_display.clear()
+            else:
+                QMessageBox.warning(self, "错误", "删除失败")
+
     def _import_players_csv(self):
         """从CSV导入玩家
-        CSV格式: QQ号,昵称[,初始积分]
-        第三列积分可选，默认为0
+        CSV格式: QQ号,昵称[,阵营][,初始积分]
+        第三列阵营可选(收养人/Aeonreth)，第四列积分可选
         """
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -1495,15 +1542,22 @@ class GMWindow(QMainWindow):
 
             qq_id = str(row[0]).strip()
             nickname = str(row[1]).strip()
+            faction = None
             initial_score = 0
 
-            # 解析可选的第三列积分
+            # 解析可选的第三列阵营
             if len(row) >= 3 and row[2].strip():
+                faction_val = row[2].strip()
+                if faction_val in ["收养人", "Aeonreth"]:
+                    faction = faction_val
+
+            # 解析可选的第四列积分
+            if len(row) >= 4 and row[3].strip():
                 try:
-                    initial_score = int(row[2].strip())
+                    initial_score = int(row[3].strip())
                 except ValueError:
                     error_count += 1
-                    errors.append(f"第{row_num}行: 积分格式错误 ({row[2]})")
+                    errors.append(f"第{row_num}行: 积分格式错误 ({row[3]})")
                     return
 
             if not qq_id or not nickname:
@@ -1523,6 +1577,8 @@ class GMWindow(QMainWindow):
 
             try:
                 self.player_dao.create_player(qq_id, nickname)
+                if faction:
+                    self.player_dao.update_faction(qq_id, faction)
                 if initial_score > 0:
                     self.player_dao.add_score(qq_id, initial_score)
                 success_count += 1
