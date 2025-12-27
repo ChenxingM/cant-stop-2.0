@@ -1500,7 +1500,8 @@ class GMWindow(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
-            if self.player_dao.delete_player(self.selected_qq_id):
+            success, error_msg = self.player_dao.delete_player(self.selected_qq_id)
+            if success:
                 QMessageBox.information(self, "成功", f"已删除玩家: {player.nickname} ({player.qq_id})")
                 self.selected_qq_id = None
                 self._refresh_players()
@@ -1508,7 +1509,7 @@ class GMWindow(QMainWindow):
                 self.progress_display.clear()
                 self.control_status_display.clear()
             else:
-                QMessageBox.warning(self, "错误", "删除失败")
+                QMessageBox.warning(self, "错误", f"删除失败: {error_msg}")
 
     def _import_players_csv(self):
         """从CSV导入玩家
@@ -1586,21 +1587,39 @@ class GMWindow(QMainWindow):
                 error_count += 1
                 errors.append(f"第{row_num}行: {str(e)}")
 
-        try:
-            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                reader = csv.reader(f)
-                # 尝试跳过表头
-                first_row = next(reader, None)
-                if first_row and first_row[0].lower() in ['qq', 'qq号', 'qqid', 'qq_id']:
-                    pass  # 跳过表头
-                else:
-                    # 不是表头，处理第一行
-                    if first_row:
-                        process_row(first_row, 1)
+        # 尝试多种编码
+        encodings = ['utf-8-sig', 'utf-8', 'gb2312', 'gbk', 'gb18030']
+        file_content = None
+        used_encoding = None
 
-                # 处理剩余行
-                for row_num, row in enumerate(reader, start=2):
-                    process_row(row, row_num)
+        for encoding in encodings:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    file_content = f.read()
+                    used_encoding = encoding
+                    break
+            except (UnicodeDecodeError, LookupError):
+                continue
+
+        if file_content is None:
+            QMessageBox.critical(self, "导入失败", "无法识别文件编码，请使用UTF-8或GB2312编码")
+            return
+
+        try:
+            import io
+            reader = csv.reader(io.StringIO(file_content))
+            # 尝试跳过表头
+            first_row = next(reader, None)
+            if first_row and first_row[0].lower() in ['qq', 'qq号', 'qqid', 'qq_id']:
+                pass  # 跳过表头
+            else:
+                # 不是表头，处理第一行
+                if first_row:
+                    process_row(first_row, 1)
+
+            # 处理剩余行
+            for row_num, row in enumerate(reader, start=2):
+                process_row(row, row_num)
 
             # 显示结果
             msg = f"导入完成!\n\n成功: {success_count} 个\n跳过(已存在): {skip_count} 个\n失败: {error_count} 个"
