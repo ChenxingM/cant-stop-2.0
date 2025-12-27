@@ -597,7 +597,7 @@ class GMWindow(QMainWindow):
 
         score_layout.addWidget(QLabel("数值:"), 0, 0)
         self.score_input = QLineEdit()
-        self.score_input.setPlaceholderText("正数增加，负数扣除")
+        self.score_input.setPlaceholderText("增加:加减积分 设置:直接改为此值")
         score_layout.addWidget(self.score_input, 0, 1)
 
         score_layout.addWidget(QLabel("类型:"), 1, 0)
