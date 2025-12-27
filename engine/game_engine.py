@@ -314,13 +314,16 @@ class GameEngine:
         if not state.current_round_active:
             return GameResult(False, "请先输入【轮次开始】")
 
+        # 检查积分是否足够投骰（必须 >= 10）
+        player = self.player_dao.get_player(qq_id)
+        if player.current_score < 10:
+            return GameResult(False, f"❌ 积分不足，需要至少10积分才能投骰\n当前积分：{player.current_score}")
+
         # 检查玩家是否被暂停
         if state.skipped_rounds > 0:
             # 暂停状态：扣除积分但不能投掷骰子
-            player = self.player_dao.get_player(qq_id)
             cost = 10  # 默认每回合10积分
-            if not self.player_dao.consume_score(qq_id, cost):
-                return GameResult(False, f"积分不足，需要{cost}积分")
+            self.player_dao.consume_score(qq_id, cost)
 
             # 减少暂停回合数
             state.skipped_rounds -= 1
@@ -329,8 +332,7 @@ class GameEngine:
             remaining_msg = f"，还需暂停{state.skipped_rounds}回合" if state.skipped_rounds > 0 else ""
             return GameResult(False, f"⏸️ 您当前处于暂停状态，本回合无法投掷骰子\n已消耗{cost}积分{remaining_msg}")
 
-        # 检查积分（黑喵效果可减少消耗）
-        player = self.player_dao.get_player(qq_id)
+        # 计算消耗积分（黑喵效果可减少消耗）
         base_cost = 10  # 默认每回合10积分
         cost = max(0, base_cost - state.cost_reduction)  # 黑喵效果减少消耗
 
@@ -347,8 +349,8 @@ class GameEngine:
             self.state_dao.update_state(state)
             print(f"[双倍消耗] {qq_id} 本次投骰消耗双倍积分: {cost}")
 
-        if cost > 0 and not self.player_dao.consume_score(qq_id, cost):
-            return GameResult(False, f"积分不足，需要{cost}积分")
+        if cost > 0:
+            self.player_dao.consume_score(qq_id, cost)
 
         # 确定骰子数量（可能被陷阱效果修改）
         dice_groups = None  # 默认为 None，让 _get_possible_sums 自动决定分组
@@ -1392,9 +1394,8 @@ class GameEngine:
             self.state_dao.update_state(state)
             half_price_msg = " 🎫 购物卡生效，享受半价优惠！"
 
-        # 扣除积分
-        if not self.player_dao.consume_score(qq_id, actual_price):
-            return GameResult(False, "积分不足")
+        # 扣除积分（允许负数）
+        self.player_dao.consume_score(qq_id, actual_price)
 
         # 添加道具
         self.inventory_dao.add_item(qq_id, item.item_id, item.item_name, item.item_type)

@@ -689,14 +689,12 @@ class ContentHandler:
                                requires_input=True,
                                choices=["绕过去(消耗5积分)", "直接过去"])
 
-        if choice == "绕过去":
-            if self.player_dao.consume_score(qq_id, 5):
-                return ContentResult(True,
-                                   "看起来太牙白了，还是绕远路走吧…\n\n"
-                                   "你沿着气团边缘缓缓绕行，蝴蝶似乎被惊动，扑棱着飞向远方。\n\n"
-                                   "无事发生。")
-            else:
-                return ContentResult(False, "积分不足，无法选择此项")
+        if choice.startswith("绕过去"):
+            self.player_dao.consume_score(qq_id, 5)
+            return ContentResult(True,
+                               "看起来太牙白了，还是绕远路走吧…\n\n"
+                               "你沿着气团边缘缓缓绕行，蝴蝶似乎被惊动，扑棱着飞向远方。\n\n"
+                               "无事发生。（-5积分）")
         elif choice == "直接过去":  # 直接过去
             return ContentResult(True,
                                "脚尖刚触到气团边缘，你整个人突然被一股轻柔的力量拉扯，眼前的景象骤然扭曲，瞬间坠入一片熟悉又陌生的旧日梦境之中。\n\n"
@@ -755,12 +753,10 @@ class ContentHandler:
             return ContentResult(True,
                                "\"哦不——那根本不是普通的花！\"你被巨大的\"花\"包围，花心长出无数尖牙一齐张开血盆大口向你袭来…你停止一回合（消耗一回合积分）。等你回过神来，你发现自己并没有外伤。花仍然在摇摆摇摆，摇摆摇摆……",
                                {'skip_rounds': 1})
-        elif choice == "浇水":
-            if self.player_dao.consume_score(qq_id, 5):
-                return ContentResult(True,
-                                   "小花快速生长变成了大花，大花仍然在摇摆摇摆，摇摆摇摆……\n\n*在你之后到达此处的玩家将失去[晃得头晕，走了]和[浇水]选项。")
-            else:
-                return ContentResult(False, "积分不足，无法购买水壶")
+        elif choice.startswith("浇水"):
+            self.player_dao.consume_score(qq_id, 5)
+            return ContentResult(True,
+                               "小花快速生长变成了大花，大花仍然在摇摆摇摆，摇摆摇摆……（-5积分）\n\n*在你之后到达此处的玩家将失去[晃得头晕，走了]和[浇水]选项。")
         else:  # 晃得头晕,走了
             return ContentResult(True, "小花仍然在摇摆摇摆，摇摆摇摆……无事发生。")
 
@@ -901,10 +897,8 @@ class ContentHandler:
                                "你抵挡不住螂的力量，扔了骰子就跑，下次投掷固定数值(3,3,3,4,4,4)",
                                {'next_dice_fixed': [3, 3, 3, 4, 4, 4]})
         elif choice.startswith("喷杀虫剂"):
-            if self.player_dao.consume_score(qq_id, 5):
-                return ContentResult(True, "\"大螂，该吃药了\"——显然这点剂量难以脚刹大螂，不过它还是飞走了，你逃过一劫。")
-            else:
-                return ContentResult(False, "积分不足，无法购买杀虫剂")
+            self.player_dao.consume_score(qq_id, 5)
+            return ContentResult(True, "\"大螂，该吃药了\"——显然这点剂量难以脚刹大螂，不过它还是飞走了，你逃过一劫。（-5积分）")
         elif choice.startswith("化兽为友"):
             dice_roll = random.randint(1, 6)
             if dice_roll <= 3:
@@ -1875,11 +1869,9 @@ class ContentHandler:
                                choices=choices)
 
         if choice == "贴墙潜行":
-            if self.player_dao.consume_score(qq_id, 5):
-                return ContentResult(True,
-                                   "你佝偻着身子,沿着墙角缓缓挪动,心跳声在寂静中格外清晰。黑影们似乎毫无察觉。直到你绕过拐角,这才敢松了一口气。无事发生")
-            else:
-                return ContentResult(False, "积分不足,无法选择此选项")
+            self.player_dao.consume_score(qq_id, 5)
+            return ContentResult(True,
+                               "你佝偻着身子,沿着墙角缓缓挪动,心跳声在寂静中格外清晰。黑影们似乎毫无察觉。直到你绕过拐角,这才敢松了一口气。无事发生（-5积分）")
         elif choice == "快步穿过":
             self.player_dao.add_score(qq_id, -5)
             return ContentResult(True,
@@ -2327,9 +2319,7 @@ class ContentHandler:
                 discount_msg = f"\n💕 契约对象 {partner.nickname} 是Aeonreth，费用减半！"
 
         cost = len(specified_rolls) * cost_per_roll
-        if player.current_score < cost:
-            return ContentResult(False, f"积分不足！需要{cost}积分")
-
+        # 允许扣到负数
         self.player_dao.add_score(qq_id, -cost)
         return ContentResult(True,
                            f"🪞 使用闘Ae魔镜！\n"
@@ -2748,11 +2738,7 @@ class ContentHandler:
 
     def _use_red_rose(self, qq_id: str, **kwargs) -> ContentResult:
         """隐藏道具9111: 红玫瑰 - 失败时可消耗10积分重新投掷"""
-        player = self.player_dao.get_player(qq_id)
-        if player.current_score < 10:
-            return ContentResult(False, "❌ 积分不足！使用红玫瑰需要10积分")
-
-        # 扣除积分
+        # 扣除积分（允许负数）
         self.player_dao.add_score(qq_id, -10)
 
         return ContentResult(True,
@@ -2766,10 +2752,6 @@ class ContentHandler:
         """隐藏道具9112: 蓝玫瑰 - 让契约对象（或自己）失败时可重新投掷"""
         from database.dao import ContractDAO
         contract_dao = ContractDAO(self.conn)
-
-        player = self.player_dao.get_player(qq_id)
-        if player.current_score < 10:
-            return ContentResult(False, "❌ 积分不足！使用蓝玫瑰需要10积分")
 
         # 检查是否有契约对象
         partner_qq = contract_dao.get_contract_partner(qq_id)

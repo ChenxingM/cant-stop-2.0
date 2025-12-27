@@ -326,7 +326,7 @@ class ShopItem:
         if self.price <= 0:
             return False, "该道具不可购买"
 
-        # 检查积分
+        # 检查积分是否足够
         if player.current_score < self.price:
             return False, f"积分不足，需要{self.price}积分"
 

@@ -81,9 +81,9 @@ class PlayerDAO:
         self.conn.commit()
 
     def consume_score(self, qq_id: str, amount: int) -> bool:
-        """消耗积分，返回是否成功"""
+        """消耗积分（允许负数），返回是否成功"""
         player = self.get_player(qq_id)
-        if not player or player.current_score < amount:
+        if not player:
             return False
 
         cursor = self.conn.cursor()
