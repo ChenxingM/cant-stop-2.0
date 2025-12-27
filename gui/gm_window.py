@@ -1513,7 +1513,7 @@ class GMWindow(QMainWindow):
             self.register_nickname_input.clear()
             self.register_faction_combo.setCurrentIndex(0)
             self.register_score_input.setValue(0)
-            self._refresh_players()
+            self.refresh_players()
         else:
             QMessageBox.warning(self, "错误", "注册失败")
 
@@ -1542,7 +1542,7 @@ class GMWindow(QMainWindow):
             if success:
                 QMessageBox.information(self, "成功", f"已删除玩家: {player.nickname} ({player.qq_id})")
                 self.selected_qq_id = None
-                self._refresh_players()
+                self.refresh_players()
                 self.player_detail.clear()
                 self.progress_display.clear()
                 self.control_status_display.clear()
@@ -1667,7 +1667,7 @@ class GMWindow(QMainWindow):
                     msg += f"\n... 还有 {len(errors) - 10} 个错误"
 
             QMessageBox.information(self, "导入结果", msg)
-            self._refresh_players()
+            self.refresh_players()
 
         except Exception as e:
             QMessageBox.critical(self, "导入失败", f"读取CSV文件失败: {str(e)}")
@@ -1834,7 +1834,7 @@ QQ号: {player.qq_id}
 
         self.player_dao.update_faction(self.selected_qq_id, faction)
         QMessageBox.information(self, "成功", f"已将 {player.nickname} 的阵营修改为: {faction or '未选择'}")
-        self._refresh_players()
+        self.refresh_players()
         self._show_player_detail(self.selected_qq_id)
 
     # ==================== 积分操作 ====================
