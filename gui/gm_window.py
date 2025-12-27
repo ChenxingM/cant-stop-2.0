@@ -994,6 +994,27 @@ class GMWindow(QMainWindow):
         first_group.setLayout(first_layout)
         right_layout.addWidget(first_group)
 
+        # 热重载
+        reload_group = QGroupBox("🔄 热重载")
+        reload_layout = QVBoxLayout()
+
+        reload_custom_cmd_btn = QPushButton("重新加载自定义命令")
+        reload_custom_cmd_btn.clicked.connect(self._reload_custom_commands)
+        reload_custom_cmd_btn.setStyleSheet("background-color: #FF9800; color: white;")
+        reload_layout.addWidget(reload_custom_cmd_btn)
+
+        reload_modules_btn = QPushButton("重新加载游戏模块")
+        reload_modules_btn.clicked.connect(self._reload_game_modules)
+        reload_modules_btn.setStyleSheet("background-color: #2196F3; color: white;")
+        reload_layout.addWidget(reload_modules_btn)
+
+        reload_info = QLabel("提示: 修改代码后点击重载，无需重启程序")
+        reload_info.setStyleSheet("color: #666; font-size: 10px;")
+        reload_layout.addWidget(reload_info)
+
+        reload_group.setLayout(reload_layout)
+        right_layout.addWidget(reload_group)
+
         right_layout.addStretch()
 
         # 使用分割器
@@ -2471,6 +2492,56 @@ QQ号: {player.qq_id}
 
         self._log("解除所有玩家锁定")
         self.refresh_players()
+
+    # ==================== 热重载操作 ====================
+
+    def _reload_custom_commands(self):
+        """重新加载自定义命令"""
+        try:
+            # 重新加载自定义命令JSON
+            from engine.game_engine import GameEngine
+            # 创建临时引擎实例来加载命令
+            temp_engine = GameEngine.__new__(GameEngine)
+            temp_engine.custom_cmd_dao = self.custom_cmd_dao
+            temp_engine._load_custom_commands()
+
+            self._log("已重新加载自定义命令")
+            QMessageBox.information(self, "成功", "自定义命令已重新加载\n\n修改 data/custom_commands.json 后点击此按钮即可生效")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"重新加载失败: {str(e)}")
+
+    def _reload_game_modules(self):
+        """重新加载游戏模块"""
+        import importlib
+        modules_to_reload = []
+
+        try:
+            # 重新加载核心模块
+            import engine.game_engine
+            import engine.content_handler
+            import engine.command_parser
+            import data.board_config
+
+            importlib.reload(data.board_config)
+            modules_to_reload.append("board_config")
+
+            importlib.reload(engine.command_parser)
+            modules_to_reload.append("command_parser")
+
+            importlib.reload(engine.content_handler)
+            modules_to_reload.append("content_handler")
+
+            importlib.reload(engine.game_engine)
+            modules_to_reload.append("game_engine")
+
+            self._log(f"已重新加载模块: {', '.join(modules_to_reload)}")
+            QMessageBox.information(
+                self, "成功",
+                f"已重新加载以下模块:\n• {chr(10).join(modules_to_reload)}\n\n"
+                "注意: QQ Bot需要重新创建GameEngine实例才能使用新代码"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"重新加载失败: {str(e)}\n\n已加载: {', '.join(modules_to_reload)}")
 
     # ==================== 契约管理操作 ====================
 
