@@ -574,6 +574,23 @@ class GMWindow(QMainWindow):
         detail_group.setLayout(detail_layout)
         scroll_layout.addWidget(detail_group)
 
+        # 阵营修改
+        faction_group = QGroupBox("⚔️ 阵营修改")
+        faction_layout = QHBoxLayout()
+
+        faction_layout.addWidget(QLabel("阵营:"))
+        self.modify_faction_combo = QComboBox()
+        self.modify_faction_combo.addItems(["未选择", "收养人", "Aeonreth"])
+        faction_layout.addWidget(self.modify_faction_combo)
+
+        modify_faction_btn = QPushButton("修改阵营")
+        modify_faction_btn.clicked.connect(self._modify_faction)
+        modify_faction_btn.setStyleSheet("background-color: #9C27B0; color: white;")
+        faction_layout.addWidget(modify_faction_btn)
+
+        faction_group.setLayout(faction_layout)
+        scroll_layout.addWidget(faction_group)
+
         # 积分管理
         score_group = QGroupBox("💰 积分管理")
         score_layout = QGridLayout()
@@ -1422,6 +1439,17 @@ class GMWindow(QMainWindow):
         self._update_control_status(qq_id)
         self._update_contract_display(qq_id)
         self._refresh_contract_combo(qq_id)
+        self._update_faction_combo(qq_id)
+
+    def _update_faction_combo(self, qq_id: str):
+        """更新阵营下拉框为玩家当前阵营"""
+        player = self.player_dao.get_player(qq_id)
+        if player and player.faction:
+            index = self.modify_faction_combo.findText(player.faction)
+            if index >= 0:
+                self.modify_faction_combo.setCurrentIndex(index)
+        else:
+            self.modify_faction_combo.setCurrentIndex(0)  # 未选择
 
     def _filter_players(self):
         """筛选玩家"""
@@ -1776,6 +1804,28 @@ QQ号: {player.qq_id}
     def _update_lockout_display(self, state):
         """更新锁定状态显示"""
         pass  # 已在其他方法中实现
+
+    # ==================== 阵营操作 ====================
+
+    def _modify_faction(self):
+        """修改玩家阵营"""
+        if not self.selected_qq_id:
+            QMessageBox.warning(self, "警告", "请先选择一个玩家")
+            return
+
+        faction = self.modify_faction_combo.currentText()
+        if faction == "未选择":
+            faction = None
+
+        player = self.player_dao.get_player(self.selected_qq_id)
+        if not player:
+            QMessageBox.warning(self, "错误", "玩家不存在")
+            return
+
+        self.player_dao.update_faction(self.selected_qq_id, faction)
+        QMessageBox.information(self, "成功", f"已将 {player.nickname} 的阵营修改为: {faction or '未选择'}")
+        self._refresh_players()
+        self._show_player_detail(self.selected_qq_id)
 
     # ==================== 积分操作 ====================
 
