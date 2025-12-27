@@ -7,6 +7,8 @@ QQ Bot Integration with NapCat
 import json
 import asyncio
 import aiohttp
+import platform
+import socket
 from typing import Optional, Dict, Callable
 from dataclasses import dataclass
 import logging
@@ -20,11 +22,25 @@ from engine.game_engine import GameEngine
 from engine.command_parser import CommandParser, COMMAND_HANDLERS
 from database.schema import init_database
 
+# 版本信息
+try:
+    from version import VERSION, AUTHOR, PROJECT_NAME
+except ImportError:
+    VERSION = "dev"
+    AUTHOR = "Unknown"
+    PROJECT_NAME = "贪骰无厌 2.0"
+
+
+def get_base_path():
+    """获取项目根目录（兼容打包后环境）"""
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent.parent
 
 def setup_logging():
     """配置日志系统：控制台完整输出 + 文件记录"""
     # 确保logs目录存在
-    log_dir = Path(__file__).parent.parent / "logs"
+    log_dir = get_base_path() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
     # 生成日志文件名（按启动时间）
@@ -338,7 +354,7 @@ class QQBot:
                 image_path = Path(part)
                 if not image_path.is_absolute():
                     # 相对路径转绝对路径
-                    image_path = Path(__file__).parent.parent / part
+                    image_path = get_base_path() / part
 
                 if image_path.exists():
                     # 使用 file:// 协议发送本地图片
@@ -421,18 +437,40 @@ def load_config(config_path: str = "config.json") -> BotConfig:
         return BotConfig()
 
 
+def get_local_ip():
+    """获取本机局域网 IP"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "未知"
+
 async def main():
     """主函数"""
     # 从配置文件加载配置
     config = load_config("config.json")
 
+    # 系统信息
     logger.info("=" * 60)
-    logger.info("贪骰无厌 2.0 - QQ机器人")
+    logger.info(f"{PROJECT_NAME}")
+    logger.info(f"版本: {VERSION}  作者: {AUTHOR}")
     logger.info("=" * 60)
-    logger.info(f"日志文件: {current_log_file}")
-    logger.info(f"WebSocket URL: {config.ws_url}")
-    logger.info(f"允许的群组: {config.allowed_groups}")
-    logger.info(f"重连: {'启用' if config.reconnect else '禁用'}")
+    logger.info("[系统信息]")
+    logger.info(f"  操作系统: {platform.system()} {platform.release()}")
+    logger.info(f"  系统版本: {platform.version()}")
+    logger.info(f"  主机名: {platform.node()}")
+    logger.info(f"  本机IP: {get_local_ip()}")
+    logger.info(f"  Python: {platform.python_version()}")
+    logger.info(f"  架构: {platform.machine()}")
+    logger.info("-" * 60)
+    logger.info("[运行配置]")
+    logger.info(f"  日志文件: {current_log_file}")
+    logger.info(f"  WebSocket: {config.ws_url}")
+    logger.info(f"  允许群组: {config.allowed_groups}")
+    logger.info(f"  自动重连: {'启用' if config.reconnect else '禁用'}")
     logger.info("=" * 60)
 
     # 创建并启动机器人

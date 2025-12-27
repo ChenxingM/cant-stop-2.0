@@ -48,10 +48,23 @@ class GameEngine:
             self.player_dao, self.inventory_dao, self.achievement_dao,
             self.position_dao, self.shop_dao, db_conn
         )
+        # 启动时自动从 JSON 导入口令配置
+        self._import_custom_commands_from_json()
         # 加载自定义口令到命令解析器
         self._load_custom_commands()
 
     # ==================== 辅助方法 ====================
+
+    def _import_custom_commands_from_json(self):
+        """启动时从 JSON 文件导入口令配置"""
+        # 打包后使用 exe 所在目录，开发时使用项目目录
+        if getattr(sys, 'frozen', False):
+            base_path = Path(sys.executable).parent
+        else:
+            base_path = Path(__file__).parent.parent
+        json_path = base_path / "data" / "custom_commands.json"
+        if json_path.exists():
+            self.custom_cmd_dao.import_from_json(str(json_path))
 
     def _load_custom_commands(self):
         """加载自定义口令到命令解析器"""
@@ -1842,7 +1855,7 @@ class GameEngine:
         return GameResult(True, "\n".join(lines))
 
     def claim_sideline(self, qq_id: str, line_id: int) -> GameResult:
-        """支线积分领取，+30积分，仅限领取一次
+        """支线积分领取，+15积分，仅限领取一次
 
         Args:
             qq_id: 玩家QQ号
@@ -1864,7 +1877,7 @@ class GameEngine:
             return GameResult(False, f"❌ 您已经领取过「支线{line_id}」的积分奖励了！")
 
         # 发放积分
-        self.player_dao.add_score(qq_id, 30)
+        self.player_dao.add_score(qq_id, 15)
 
         # 记录已领取（使用normal类型）
         self.achievement_dao.add_achievement(qq_id, 10000 + line_id, claim_key, "normal")
@@ -1872,10 +1885,10 @@ class GameEngine:
         # 获取更新后的积分
         player = self.player_dao.get_player(qq_id)
 
-        return GameResult(True, f"✅ 支线{line_id}积分领取成功！获得 +30 积分\n当前积分：{player.current_score}")
+        return GameResult(True, f"✅ 支线{line_id}积分领取成功！获得 +15 积分\n当前积分：{player.current_score}")
 
     def claim_mainline(self, qq_id: str, line_id: int) -> GameResult:
-        """主线积分领取，+50积分，仅限领取一次
+        """主线积分领取，+5积分，仅限领取一次
 
         Args:
             qq_id: 玩家QQ号
@@ -1897,7 +1910,7 @@ class GameEngine:
             return GameResult(False, f"❌ 您已经领取过「主线{line_id}」的积分奖励了！")
 
         # 发放积分
-        self.player_dao.add_score(qq_id, 50)
+        self.player_dao.add_score(qq_id, 5)
 
         # 记录已领取（使用normal类型）
         self.achievement_dao.add_achievement(qq_id, 20000 + line_id, claim_key, "normal")
@@ -1905,7 +1918,7 @@ class GameEngine:
         # 获取更新后的积分
         player = self.player_dao.get_player(qq_id)
 
-        return GameResult(True, f"✅ 主线{line_id}积分领取成功！获得 +50 积分\n当前积分：{player.current_score}")
+        return GameResult(True, f"✅ 主线{line_id}积分领取成功！获得 +5 积分\n当前积分：{player.current_score}")
 
     # ==================== 特殊效果使用 ====================
 

@@ -348,6 +348,9 @@ class GMWindow(QMainWindow):
         self.setWindowTitle("贪骰无厌 2.0 - GM管理界面")
         self.setGeometry(50, 50, 1500, 900)
 
+        # 保存数据库路径
+        self.db_path = db_path
+
         # 初始化数据库
         self.db_conn = init_database(db_path)
         self.player_dao = PlayerDAO(self.db_conn)
@@ -2239,13 +2242,20 @@ QQ号: {player.qq_id}
             self.refresh_all()
 
     def _backup_database(self):
-        """备份数据库"""
-        import shutil
+        """备份数据库（使用 SQLite 备份 API，确保数据完整）"""
+        import sqlite3
+        from pathlib import Path
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"data/game_backup_{timestamp}.db"
+        db_dir = Path(self.db_path).parent
+        backup_path = db_dir / f"game_backup_{timestamp}.db"
 
         try:
-            shutil.copy("data/game.db", backup_path)
+            # 使用 SQLite 备份 API（比直接复制文件更安全）
+            backup_conn = sqlite3.connect(str(backup_path))
+            self.db_conn.backup(backup_conn)
+            backup_conn.close()
+
             self._log(f"数据库已备份: {backup_path}")
             QMessageBox.information(self, "成功", f"数据库已备份到:\n{backup_path}")
         except Exception as e:
