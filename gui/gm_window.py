@@ -482,6 +482,42 @@ class GMWindow(QMainWindow):
         search_layout.addWidget(self.player_search)
         left_layout.addLayout(search_layout)
 
+        # 手动注册玩家
+        register_group = QGroupBox("📝 注册玩家")
+        register_layout = QGridLayout()
+
+        register_layout.addWidget(QLabel("QQ号:"), 0, 0)
+        self.register_qq_input = QLineEdit()
+        self.register_qq_input.setPlaceholderText("输入QQ号")
+        register_layout.addWidget(self.register_qq_input, 0, 1)
+
+        register_layout.addWidget(QLabel("昵称:"), 1, 0)
+        self.register_nickname_input = QLineEdit()
+        self.register_nickname_input.setPlaceholderText("输入昵称")
+        register_layout.addWidget(self.register_nickname_input, 1, 1)
+
+        register_layout.addWidget(QLabel("初始积分:"), 2, 0)
+        self.register_score_input = QSpinBox()
+        self.register_score_input.setRange(0, 99999)
+        self.register_score_input.setValue(0)
+        register_layout.addWidget(self.register_score_input, 2, 1)
+
+        register_btn_layout = QHBoxLayout()
+        register_btn = QPushButton("注册玩家")
+        register_btn.clicked.connect(self._register_player)
+        register_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        register_btn_layout.addWidget(register_btn)
+
+        import_csv_btn = QPushButton("导入CSV")
+        import_csv_btn.clicked.connect(self._import_players_csv)
+        import_csv_btn.setStyleSheet("background-color: #2196F3; color: white;")
+        register_btn_layout.addWidget(import_csv_btn)
+
+        register_layout.addLayout(register_btn_layout, 3, 0, 1, 2)
+
+        register_group.setLayout(register_layout)
+        left_layout.addWidget(register_group)
+
         # 玩家列表
         self.players_table = QTableWidget()
         self.players_table.setColumnCount(7)
@@ -1387,6 +1423,141 @@ class GMWindow(QMainWindow):
                 self.players_table.showRow(i)
             else:
                 self.players_table.hideRow(i)
+
+    def _register_player(self):
+        """手动注册玩家"""
+        qq_id = self.register_qq_input.text().strip()
+        nickname = self.register_nickname_input.text().strip()
+        initial_score = self.register_score_input.value()
+
+        if not qq_id:
+            QMessageBox.warning(self, "错误", "请输入QQ号")
+            return
+
+        if not nickname:
+            QMessageBox.warning(self, "错误", "请输入昵称")
+            return
+
+        # 检查QQ号是否为纯数字
+        if not qq_id.isdigit():
+            QMessageBox.warning(self, "错误", "QQ号必须为纯数字")
+            return
+
+        # 检查玩家是否已存在
+        existing = self.player_dao.get_player(qq_id)
+        if existing:
+            QMessageBox.warning(self, "错误", f"玩家 {qq_id} ({existing.nickname}) 已存在")
+            return
+
+        # 注册玩家
+        player = self.player_dao.create_player(qq_id, nickname)
+        if player:
+            # 设置初始积分
+            if initial_score > 0:
+                self.player_dao.add_score(qq_id, initial_score)
+            QMessageBox.information(self, "成功", f"已注册玩家: {nickname} ({qq_id})\n初始积分: {initial_score}")
+            self.register_qq_input.clear()
+            self.register_nickname_input.clear()
+            self.register_score_input.setValue(0)
+            self._refresh_players()
+        else:
+            QMessageBox.warning(self, "错误", "注册失败")
+
+    def _import_players_csv(self):
+        """从CSV导入玩家
+        CSV格式: QQ号,昵称[,初始积分]
+        第三列积分可选，默认为0
+        """
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择CSV文件",
+            "",
+            "CSV文件 (*.csv);;所有文件 (*)"
+        )
+
+        if not file_path:
+            return
+
+        import csv
+        success_count = 0
+        skip_count = 0
+        error_count = 0
+        errors = []
+
+        def process_row(row, row_num):
+            """处理单行数据"""
+            nonlocal success_count, skip_count, error_count
+
+            if len(row) < 2:
+                error_count += 1
+                errors.append(f"第{row_num}行: 列数不足")
+                return
+
+            qq_id = str(row[0]).strip()
+            nickname = str(row[1]).strip()
+            initial_score = 0
+
+            # 解析可选的第三列积分
+            if len(row) >= 3 and row[2].strip():
+                try:
+                    initial_score = int(row[2].strip())
+                except ValueError:
+                    error_count += 1
+                    errors.append(f"第{row_num}行: 积分格式错误 ({row[2]})")
+                    return
+
+            if not qq_id or not nickname:
+                error_count += 1
+                errors.append(f"第{row_num}行: QQ号或昵称为空")
+                return
+
+            if not qq_id.isdigit():
+                error_count += 1
+                errors.append(f"第{row_num}行: QQ号不是数字 ({qq_id})")
+                return
+
+            existing = self.player_dao.get_player(qq_id)
+            if existing:
+                skip_count += 1
+                return
+
+            try:
+                self.player_dao.create_player(qq_id, nickname)
+                if initial_score > 0:
+                    self.player_dao.add_score(qq_id, initial_score)
+                success_count += 1
+            except Exception as e:
+                error_count += 1
+                errors.append(f"第{row_num}行: {str(e)}")
+
+        try:
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                reader = csv.reader(f)
+                # 尝试跳过表头
+                first_row = next(reader, None)
+                if first_row and first_row[0].lower() in ['qq', 'qq号', 'qqid', 'qq_id']:
+                    pass  # 跳过表头
+                else:
+                    # 不是表头，处理第一行
+                    if first_row:
+                        process_row(first_row, 1)
+
+                # 处理剩余行
+                for row_num, row in enumerate(reader, start=2):
+                    process_row(row, row_num)
+
+            # 显示结果
+            msg = f"导入完成!\n\n成功: {success_count} 个\n跳过(已存在): {skip_count} 个\n失败: {error_count} 个"
+            if errors:
+                msg += f"\n\n错误详情:\n" + "\n".join(errors[:10])
+                if len(errors) > 10:
+                    msg += f"\n... 还有 {len(errors) - 10} 个错误"
+
+            QMessageBox.information(self, "导入结果", msg)
+            self._refresh_players()
+
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"读取CSV文件失败: {str(e)}")
 
     # ==================== 显示函数 ====================
 
