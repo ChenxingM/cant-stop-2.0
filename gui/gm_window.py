@@ -17,10 +17,10 @@ from PySide6.QtWidgets import (
     QTextEdit, QLineEdit, QGroupBox, QGridLayout, QMessageBox,
     QHeaderView, QScrollArea, QFrame, QSplitter, QComboBox,
     QSpinBox, QCheckBox, QToolTip, QDialog, QDialogButtonBox,
-    QListWidget, QListWidgetItem, QProgressBar, QFileDialog
+    QListWidget, QListWidgetItem, QProgressBar, QFileDialog, QMenuBar, QMenu
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSize, QPoint, QRect
-from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush, QCursor
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush, QCursor, QAction
 
 from database.schema import init_database
 from database.dao import (
@@ -367,8 +367,135 @@ class GMWindow(QMainWindow):
         self.refresh_timer.timeout.connect(self.refresh_all)
         self.refresh_timer.start(2000)
 
+    def _init_database(self, db_path: str):
+        """初始化数据库连接和DAO"""
+        self.db_path = db_path
+        self.db_conn = init_database(db_path)
+        self.player_dao = PlayerDAO(self.db_conn)
+        self.position_dao = PositionDAO(self.db_conn)
+        self.shop_dao = ShopDAO(self.db_conn)
+        self.achievement_dao = AchievementDAO(self.db_conn)
+        self.inventory_dao = InventoryDAO(self.db_conn)
+        self.state_dao = GameStateDAO(self.db_conn)
+        self.gem_dao = GemPoolDAO(self.db_conn)
+        self.contract_dao = ContractDAO(self.db_conn)
+        self.custom_cmd_dao = CustomCommandDAO(self.db_conn)
+        self._update_window_title()
+
+    def _update_window_title(self):
+        """更新窗口标题显示当前数据库"""
+        db_name = Path(self.db_path).name
+        self.setWindowTitle(f"贪骰无厌 2.0 - GM管理界面 [{db_name}]")
+
+    def _load_database(self):
+        """加载新的数据库文件"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择数据库文件",
+            "data/",
+            "SQLite数据库 (*.db);;所有文件 (*.*)"
+        )
+
+        if file_path:
+            try:
+                # 关闭旧连接
+                if hasattr(self, 'db_conn') and self.db_conn:
+                    self.db_conn.close()
+
+                # 初始化新数据库
+                self._init_database(file_path)
+
+                # 刷新所有UI
+                self.refresh_all()
+
+                QMessageBox.information(self, "成功", f"已加载数据库:\n{file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"加载数据库失败:\n{str(e)}")
+
+    def _create_new_database(self):
+        """创建新的数据库文件"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "创建新数据库",
+            "data/game_new.db",
+            "SQLite数据库 (*.db)"
+        )
+
+        if file_path:
+            try:
+                # 关闭旧连接
+                if hasattr(self, 'db_conn') and self.db_conn:
+                    self.db_conn.close()
+
+                # 初始化新数据库（会自动创建表结构）
+                self._init_database(file_path)
+
+                # 刷新所有UI
+                self.refresh_all()
+
+                QMessageBox.information(self, "成功", f"已创建新数据库:\n{file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"创建数据库失败:\n{str(e)}")
+
+    def _create_menu_bar(self):
+        """创建菜单栏"""
+        menubar = self.menuBar()
+
+        # 文件菜单
+        file_menu = menubar.addMenu("文件(&F)")
+
+        # 加载数据库
+        load_db_action = QAction("打开数据库(&O)...", self)
+        load_db_action.setShortcut("Ctrl+O")
+        load_db_action.triggered.connect(self._load_database)
+        file_menu.addAction(load_db_action)
+
+        # 新建数据库
+        new_db_action = QAction("新建数据库(&N)...", self)
+        new_db_action.setShortcut("Ctrl+N")
+        new_db_action.triggered.connect(self._create_new_database)
+        file_menu.addAction(new_db_action)
+
+        file_menu.addSeparator()
+
+        # 备份数据库
+        backup_action = QAction("备份数据库(&B)...", self)
+        backup_action.setShortcut("Ctrl+S")
+        backup_action.triggered.connect(self._backup_database_as)
+        file_menu.addAction(backup_action)
+
+        file_menu.addSeparator()
+
+        # 退出
+        exit_action = QAction("退出(&Q)", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+    def _backup_database_as(self):
+        """备份数据库到指定位置"""
+        import sqlite3
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "备份数据库",
+            f"data/game_backup.db",
+            "SQLite数据库 (*.db)"
+        )
+
+        if file_path:
+            try:
+                backup_conn = sqlite3.connect(file_path)
+                self.db_conn.backup(backup_conn)
+                backup_conn.close()
+                QMessageBox.information(self, "成功", f"数据库已备份到:\n{file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"备份失败:\n{str(e)}")
+
     def _init_ui(self):
         """初始化UI"""
+        # 创建菜单栏
+        self._create_menu_bar()
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
