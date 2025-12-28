@@ -345,23 +345,13 @@ class GMWindow(QMainWindow):
 
     def __init__(self, db_path: str = "data/game.db"):
         super().__init__()
-        self.setWindowTitle("贪骰无厌 2.0 - GM管理界面")
         self.setGeometry(50, 50, 1500, 900)
 
         # 保存数据库路径
         self.db_path = db_path
 
         # 初始化数据库
-        self.db_conn = init_database(db_path)
-        self.player_dao = PlayerDAO(self.db_conn)
-        self.position_dao = PositionDAO(self.db_conn)
-        self.shop_dao = ShopDAO(self.db_conn)
-        self.achievement_dao = AchievementDAO(self.db_conn)
-        self.inventory_dao = InventoryDAO(self.db_conn)
-        self.state_dao = GameStateDAO(self.db_conn)
-        self.gem_dao = GemPoolDAO(self.db_conn)
-        self.contract_dao = ContractDAO(self.db_conn)
-        self.custom_cmd_dao = CustomCommandDAO(self.db_conn)
+        self._init_database(db_path)
 
         # 当前选中的玩家
         self.selected_qq_id = None
