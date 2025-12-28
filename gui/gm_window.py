@@ -552,6 +552,7 @@ class GMWindow(QMainWindow):
         self.map_player_filter = QComboBox()
         self.map_player_filter.addItem("显示全部", None)
         self.map_player_filter.setMinimumWidth(150)
+        self.map_player_filter.currentIndexChanged.connect(self.refresh_map)
         toolbar.addWidget(self.map_player_filter)
 
         layout.addLayout(toolbar)
@@ -2984,8 +2985,14 @@ QQ号: {player.qq_id}
         """刷新地图"""
         all_positions = self.position_dao.get_all_positions_on_map()
 
+        # 获取筛选的玩家
+        filter_qq_id = self.map_player_filter.currentData()
+
         positions_dict = {}
         for qq_id, positions in all_positions.items():
+            # 如果设置了筛选，只显示该玩家
+            if filter_qq_id is not None and qq_id != filter_qq_id:
+                continue
             positions_dict[qq_id] = [
                 (p.column_number, p.position, p.marker_type)
                 for p in positions
@@ -3069,6 +3076,10 @@ QQ号: {player.qq_id}
     def _refresh_map_player_filter(self):
         """刷新地图玩家筛选下拉框"""
         current_data = self.map_player_filter.currentData()
+
+        # 暂时断开信号，避免刷新时触发 refresh_map
+        self.map_player_filter.blockSignals(True)
+
         self.map_player_filter.clear()
         self.map_player_filter.addItem("显示全部", None)
 
@@ -3078,6 +3089,15 @@ QQ号: {player.qq_id}
                 f"{player.nickname}",
                 player.qq_id
             )
+
+        # 恢复之前的选择
+        if current_data:
+            for i in range(self.map_player_filter.count()):
+                if self.map_player_filter.itemData(i) == current_data:
+                    self.map_player_filter.setCurrentIndex(i)
+                    break
+
+        self.map_player_filter.blockSignals(False)
 
 
 def main():
