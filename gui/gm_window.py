@@ -987,9 +987,33 @@ class GMWindow(QMainWindow):
         self.first_achievement_display.setReadOnly(True)
         first_layout.addWidget(self.first_achievement_display)
 
-        refresh_first_btn = QPushButton("刷新首达记录")
+        first_btn_layout = QHBoxLayout()
+
+        refresh_first_btn = QPushButton("刷新")
         refresh_first_btn.clicked.connect(self._refresh_first_achievements)
-        first_layout.addWidget(refresh_first_btn)
+        first_btn_layout.addWidget(refresh_first_btn)
+
+        clear_first_btn = QPushButton("清除全部")
+        clear_first_btn.clicked.connect(self._clear_first_achievements)
+        clear_first_btn.setStyleSheet("background-color: #FF5722; color: white;")
+        first_btn_layout.addWidget(clear_first_btn)
+
+        first_layout.addLayout(first_btn_layout)
+
+        # 清除指定列
+        clear_col_layout = QHBoxLayout()
+        clear_col_layout.addWidget(QLabel("清除列:"))
+
+        self.first_col_combo = QComboBox()
+        self.first_col_combo.addItems([str(i) for i in range(3, 19)])
+        clear_col_layout.addWidget(self.first_col_combo)
+
+        clear_col_btn = QPushButton("清除该列")
+        clear_col_btn.clicked.connect(self._clear_first_achievement_column)
+        clear_col_btn.setStyleSheet("background-color: #FF9800; color: white;")
+        clear_col_layout.addWidget(clear_col_btn)
+
+        first_layout.addLayout(clear_col_layout)
 
         first_group.setLayout(first_layout)
         right_layout.addWidget(first_group)
@@ -2456,6 +2480,50 @@ QQ号: {player.qq_id}
             text += f"\n未首达的列: {', '.join(map(str, unachieved))}"
 
         self.first_achievement_display.setText(text)
+
+    def _clear_first_achievements(self):
+        """清除所有首达记录"""
+        reply = QMessageBox.question(
+            self,
+            "确认清除",
+            "确定要清除所有首达记录吗？\n\n清除后各列的首达奖励可以重新获取。\n此操作不可撤销！",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            cursor = self.db_conn.cursor()
+            cursor.execute('DELETE FROM first_achievements')
+            self.db_conn.commit()
+            self._refresh_first_achievements()
+            QMessageBox.information(self, "成功", "首达记录已清除")
+
+    def _clear_first_achievement_column(self):
+        """清除指定列的首达记录"""
+        col = int(self.first_col_combo.currentText())
+
+        # 检查该列是否有首达记录
+        cursor = self.db_conn.cursor()
+        cursor.execute('SELECT first_qq_id FROM first_achievements WHERE column_number = ?', (col,))
+        record = cursor.fetchone()
+
+        if not record:
+            QMessageBox.information(self, "提示", f"列{col}暂无首达记录")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认清除",
+            f"确定要清除列{col}的首达记录吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            cursor.execute('DELETE FROM first_achievements WHERE column_number = ?', (col,))
+            self.db_conn.commit()
+            self._refresh_first_achievements()
+            QMessageBox.information(self, "成功", f"列{col}首达记录已清除")
 
     def _batch_add_score(self):
         """批量发放积分"""
