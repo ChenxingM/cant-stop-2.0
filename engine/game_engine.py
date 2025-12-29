@@ -2929,10 +2929,7 @@ class GameEngine:
         if effects.get('force_end_turn'):
             state.current_round_active = False
             # 把临时标记转换为永久标记
-            temp_positions = self.position_dao.get_positions(qq_id, 'temp')
-            for temp_pos in temp_positions:
-                self.position_dao.set_position(qq_id, temp_pos.column_number, temp_pos.position, 'permanent')
-            self.position_dao.clear_temp_positions(qq_id)
+            self.position_dao.convert_temp_to_permanent(qq_id)
             state.temp_markers_used = 0
             print(f"[效果应用] {qq_id} 被强制结束回合（临时标记已转为永久）")
 
