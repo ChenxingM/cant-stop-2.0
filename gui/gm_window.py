@@ -2528,7 +2528,7 @@ QQ号: {player.qq_id}
         gem_types = ['red_gem', 'blue_gem', 'red_pool', 'blue_pool']
         gem_type = gem_types[gem_type_index]
 
-        self.gem_dao.add_gem('GM', gem_type, column, position)
+        self.gem_dao.create_gem('GM', gem_type, column, position)
 
         self._log(f"在列{column}第{position}格添加{self.gem_type_combo.currentText()}")
         self.refresh_map()
