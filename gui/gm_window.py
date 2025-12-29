@@ -5,6 +5,7 @@ Game Master GUI for Can't Stop
 """
 
 import sys
+import json
 from pathlib import Path
 
 # 添加项目根目录到路径
@@ -2604,7 +2605,7 @@ QQ号: {player.qq_id}
         reply = QMessageBox.question(
             self,
             "确认清除",
-            "确定要清除所有首达记录吗？\n\n清除后各列的首达奖励可以重新获取。\n此操作不可撤销！",
+            "确定要清除所有首达记录吗？\n\n清除后各列的首达奖励可以重新获取。\n同时会清除所有玩家的登顶列记录。\n此操作不可撤销！",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -2612,9 +2613,11 @@ QQ号: {player.qq_id}
         if reply == QMessageBox.StandardButton.Yes:
             cursor = self.db_conn.cursor()
             cursor.execute('DELETE FROM first_achievements')
+            # 同时清除所有玩家的 topped_columns
+            cursor.execute("UPDATE game_state SET topped_columns = '[]'")
             self.db_conn.commit()
             self._refresh_first_achievements()
-            QMessageBox.information(self, "成功", "首达记录已清除")
+            QMessageBox.information(self, "成功", "首达记录和登顶列记录已清除")
 
     def _clear_first_achievement_column(self):
         """清除指定列的首达记录"""
@@ -2632,13 +2635,26 @@ QQ号: {player.qq_id}
         reply = QMessageBox.question(
             self,
             "确认清除",
-            f"确定要清除列{col}的首达记录吗？",
+            f"确定要清除列{col}的首达记录吗？\n同时会从所有玩家的登顶列中移除该列。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
 
         if reply == QMessageBox.StandardButton.Yes:
             cursor.execute('DELETE FROM first_achievements WHERE column_number = ?', (col,))
+            # 从所有玩家的 topped_columns 中移除该列
+            cursor.execute('SELECT qq_id, topped_columns FROM game_state WHERE topped_columns IS NOT NULL')
+            for row in cursor.fetchall():
+                qq_id, topped_json = row
+                if topped_json:
+                    try:
+                        topped = json.loads(topped_json)
+                        if col in topped:
+                            topped.remove(col)
+                            cursor.execute('UPDATE game_state SET topped_columns = ? WHERE qq_id = ?',
+                                         (json.dumps(topped), qq_id))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
             self.db_conn.commit()
             self._refresh_first_achievements()
             QMessageBox.information(self, "成功", f"列{col}首达记录已清除")
