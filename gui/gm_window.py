@@ -2620,17 +2620,9 @@ QQ号: {player.qq_id}
             QMessageBox.information(self, "成功", "首达记录和登顶列记录已清除")
 
     def _clear_first_achievement_column(self):
-        """清除指定列的首达记录"""
+        """清除指定列的首达记录和登顶记录"""
         col = int(self.first_col_combo.currentText())
-
-        # 检查该列是否有首达记录
         cursor = self.db_conn.cursor()
-        cursor.execute('SELECT first_qq_id FROM first_achievements WHERE column_number = ?', (col,))
-        record = cursor.fetchone()
-
-        if not record:
-            QMessageBox.information(self, "提示", f"列{col}暂无首达记录")
-            return
 
         reply = QMessageBox.question(
             self,
@@ -2657,7 +2649,7 @@ QQ号: {player.qq_id}
                         pass
             self.db_conn.commit()
             self._refresh_first_achievements()
-            QMessageBox.information(self, "成功", f"列{col}首达记录已清除")
+            QMessageBox.information(self, "成功", f"列{col}记录已清除")
 
     def _batch_add_score(self):
         """批量发放积分"""
