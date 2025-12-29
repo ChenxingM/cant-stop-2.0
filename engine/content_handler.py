@@ -1209,11 +1209,11 @@ class ContentHandler:
                                requires_input=True,
                                choices=["小袋子", "洗手液"])
 
-        if choice == "选择小袋子":
+        if choice == "小袋子":
             self.player_dao.add_score(qq_id, 5)
             self.inventory_dao.add_item(qq_id, 9106, "小奖杯", "hidden_item")
             return ContentResult(True, "你打开小袋子，发现里面是一些...种子？顾不上这么多了，你立刻来到了你的后院，僵尸大军马上就要来了！你种下种子，随后长出了一株株向日葵和豌豆...你靠着这些植物抵御了僵尸的进攻，并且还下了多余的阳光。获得隐藏物品：小奖杯。你的积分+5")
-        elif choice == "选择洗手液":
+        elif choice == "洗手液":
             self.achievement_dao.add_achievement(qq_id, 104, "洗手液战神", "normal")
             return ContentResult(True, "正当你拿起洗手液，一个巨大的僵尸就冲入了宅子中，僵尸强大的力量让你几乎失去意识，僵尸甚至扯断了你的手臂...但没想到的是，你打开了洗手液并倒在了自己的断手处，你所有的伤口居然全部愈合如初！你凭借着洗手液最终杀出重围成功生存。获得成就：洗手液战神")
 
