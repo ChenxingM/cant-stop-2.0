@@ -157,6 +157,11 @@ class CommandParser:
         'add_timed_checkin': r'^添加限时打卡\s+(.+?)\s+(.+?)\s+(.+?)(?:\s+(\d+))?$',
         # 查看待完成的限时打卡
         'view_timed_checkins': r'^查看限时打卡$',
+
+        # 支线系统
+        'branch_join_solo': r'^支线(\d+)单人$',  # 支线1单人
+        'branch_join_duo': r'^支线(\d+)双人\s*@?(\d+)$',  # 支线1双人@QQ号
+        'branch_record_points': r'^支线点数总计(\d+)$',  # 支线点数总计200
     }
 
     @classmethod
@@ -338,6 +343,16 @@ class CommandParser:
             params['failure_achievement'] = match.group(3)
             params['days'] = int(match.group(4)) if match.group(4) else 3
 
+        elif cmd_type == 'branch_join_solo':
+            params['event_id'] = int(match.group(1))
+
+        elif cmd_type == 'branch_join_duo':
+            params['event_id'] = int(match.group(1))
+            params['partner_qq'] = match.group(2).strip()
+
+        elif cmd_type == 'branch_record_points':
+            params['points'] = int(match.group(1))
+
         return params
 
     @classmethod
@@ -452,6 +467,10 @@ COMMAND_HANDLERS = {
     'add_timed_checkin': 'add_timed_checkin',
     'view_timed_checkins': 'view_timed_checkins',
     'custom_command': 'handle_custom_command',
+    # 支线系统
+    'branch_join_solo': 'branch_join_solo',
+    'branch_join_duo': 'branch_join_duo',
+    'branch_record_points': 'branch_record_points',
 }
 
 

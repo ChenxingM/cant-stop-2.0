@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.dao import (
     PlayerDAO, PositionDAO, InventoryDAO, GameStateDAO,
-    ShopDAO, AchievementDAO, DailyLimitDAO, CustomCommandDAO
+    ShopDAO, AchievementDAO, DailyLimitDAO, CustomCommandDAO, BranchEventDAO
 )
 from database.models import Player, Position, DAILY_LIMITS, ACHIEVEMENTS
 from data.board_config import BOARD_DATA, COLUMN_HEIGHTS, VALID_COLUMNS
@@ -44,6 +44,7 @@ class GameEngine:
         self.achievement_dao = AchievementDAO(db_conn)
         self.daily_dao = DailyLimitDAO(db_conn)
         self.custom_cmd_dao = CustomCommandDAO(db_conn)
+        self.branch_event_dao = BranchEventDAO(db_conn)
         self.content_handler = ContentHandler(
             self.player_dao, self.inventory_dao, self.achievement_dao,
             self.position_dao, self.shop_dao, db_conn
@@ -239,6 +240,11 @@ class GameEngine:
             if expired_msgs:
                 return GameResult(False, lockout_result.message + "\n\n" + "\n".join(expired_msgs))
             return lockout_result
+
+        # 检查是否有支线进行中（全员锁定主线）
+        active_branch = self.branch_event_dao.get_active_event()
+        if active_branch:
+            return GameResult(False, f"⚠️ 支线{active_branch['event_id']}进行中，主线暂停！\n请参加支线或等待支线结束。")
 
         # 检查是否已选择阵营
         player = self.player_dao.get_player(qq_id)
@@ -3570,3 +3576,101 @@ class GameEngine:
         self.state_dao.update_state(state)
 
         logging.info(f"[火堆] {qq_id} 刷新了道具「{shop_item.item_name}」")
+
+    # ==================== 支线系统 ====================
+
+    def branch_join_solo(self, qq_id: str, event_id: int) -> GameResult:
+        """单人加入支线"""
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+
+        # 检查支线是否存在
+        active = self.branch_event_dao.get_active_event()
+        if not active or active['event_id'] != event_id:
+            return GameResult(False, f"支线{event_id}未开启")
+
+        # 检查玩家是否存在
+        player = self.player_dao.get_player(qq_id)
+        if not player:
+            return GameResult(False, "请先注册游戏")
+
+        # 检查积分是否足够
+        if player.current_score < 50:
+            return GameResult(False, f"积分不足！需要50积分，当前{player.current_score}积分")
+
+        # 加入支线
+        success, msg = self.branch_event_dao.join_event(event_id, qq_id, None, is_solo=True)
+        if not success:
+            return GameResult(False, msg)
+
+        # 扣除积分
+        self.player_dao.consume_score(qq_id, 50)
+
+        return GameResult(True, f"🎯 成功加入支线{event_id}（单人）！\n消耗50积分，单人参加获得双倍投掷机会。\n支线结束后输入「支线点数总计X」记录点数。")
+
+    def branch_join_duo(self, qq_id: str, event_id: int, partner_qq: str) -> GameResult:
+        """双人加入支线"""
+        from database.dao import ContractDAO
+        contract_dao = ContractDAO(self.conn)
+
+        # 检查支线是否存在
+        active = self.branch_event_dao.get_active_event()
+        if not active or active['event_id'] != event_id:
+            return GameResult(False, f"支线{event_id}未开启")
+
+        # 检查契约关系
+        actual_partner = contract_dao.get_contract_partner(qq_id)
+        if not actual_partner or actual_partner != partner_qq:
+            return GameResult(False, "只能与契约对象组队参加支线！")
+
+        # 检查双方是否存在
+        player1 = self.player_dao.get_player(qq_id)
+        player2 = self.player_dao.get_player(partner_qq)
+        if not player1 or not player2:
+            return GameResult(False, "玩家不存在")
+
+        # 检查双方积分是否足够
+        if player1.current_score < 50:
+            return GameResult(False, f"你的积分不足！需要50积分，当前{player1.current_score}积分")
+        if player2.current_score < 50:
+            return GameResult(False, f"契约对象积分不足！需要50积分，当前{player2.current_score}积分")
+
+        # 加入支线
+        success, msg = self.branch_event_dao.join_event(event_id, qq_id, partner_qq, is_solo=False)
+        if not success:
+            return GameResult(False, msg)
+
+        # 扣除双方积分
+        self.player_dao.consume_score(qq_id, 50)
+        self.player_dao.consume_score(partner_qq, 50)
+
+        return GameResult(True, f"🎯 成功加入支线{event_id}（双人）！\n你和契约对象各消耗50积分。\n支线结束后输入「支线点数总计X」记录点数。")
+
+    def branch_record_points(self, qq_id: str, points: int) -> GameResult:
+        """记录支线点数"""
+        # 检查是否有激活的支线
+        active = self.branch_event_dao.get_active_event()
+        if not active:
+            return GameResult(False, "当前没有进行中的支线")
+
+        event_id = active['event_id']
+
+        # 记录点数
+        success, msg, reward = self.branch_event_dao.record_points(event_id, qq_id, points)
+        if not success:
+            return GameResult(False, msg)
+
+        # 获取队伍信息
+        team = self.branch_event_dao.get_team_by_player(event_id, qq_id)
+
+        # 发放奖励积分给队伍成员
+        if reward > 0:
+            self.player_dao.add_score(qq_id, reward)
+            reward_msg = f"\n每10点奖励5积分，本次奖励{reward}积分！"
+            if team and team['player2_qq']:
+                self.player_dao.add_score(team['player2_qq'], reward)
+                reward_msg = f"\n每10点队伍每人奖励5积分，本次每人+{reward}积分！"
+        else:
+            reward_msg = ""
+
+        return GameResult(True, f"✅ {msg}{reward_msg}")

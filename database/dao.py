@@ -1200,3 +1200,188 @@ class CustomCommandDAO:
             return True, f"成功导出 {len(commands)} 条口令"
         except Exception as e:
             return False, f"导出失败: {str(e)}"
+
+
+class BranchEventDAO:
+    """支线活动数据访问对象"""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def get_active_event(self) -> Optional[Dict]:
+        """获取当前激活的支线活动"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT event_id, event_name, is_active, started_at, ended_at
+            FROM branch_events WHERE is_active = 1
+        ''')
+        row = cursor.fetchone()
+        if row:
+            return {
+                'event_id': row[0],
+                'event_name': row[1],
+                'is_active': row[2],
+                'started_at': row[3],
+                'ended_at': row[4]
+            }
+        return None
+
+    def start_event(self, event_id: int, event_name: str = None) -> Tuple[bool, str]:
+        """开启支线活动"""
+        # 检查是否已有激活的支线
+        active = self.get_active_event()
+        if active:
+            return False, f"支线{active['event_id']}正在进行中，请先结束"
+
+        cursor = self.conn.cursor()
+        from datetime import datetime
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        cursor.execute('''
+            INSERT OR REPLACE INTO branch_events (event_id, event_name, is_active, started_at)
+            VALUES (?, ?, 1, ?)
+        ''', (event_id, event_name or f"支线{event_id}", now))
+        self.conn.commit()
+        return True, f"支线{event_id}已开启"
+
+    def end_event(self, event_id: int) -> Tuple[bool, str, List[Dict]]:
+        """结束支线活动，返回排名结果"""
+        cursor = self.conn.cursor()
+
+        # 检查支线是否存在且激活
+        cursor.execute('SELECT is_active FROM branch_events WHERE event_id = ?', (event_id,))
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return False, f"支线{event_id}未激活", []
+
+        # 获取排名
+        cursor.execute('''
+            SELECT team_id, player1_qq, player2_qq, is_solo, total_points
+            FROM branch_teams
+            WHERE event_id = ?
+            ORDER BY total_points DESC
+        ''', (event_id,))
+        teams = cursor.fetchall()
+
+        rankings = []
+        for i, team in enumerate(teams):
+            rankings.append({
+                'rank': i + 1,
+                'team_id': team[0],
+                'player1_qq': team[1],
+                'player2_qq': team[2],
+                'is_solo': team[3],
+                'total_points': team[4]
+            })
+
+        # 结束支线
+        from datetime import datetime
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+            UPDATE branch_events SET is_active = 0, ended_at = ? WHERE event_id = ?
+        ''', (now, event_id))
+        self.conn.commit()
+
+        return True, f"支线{event_id}已结束", rankings
+
+    def join_event(self, event_id: int, player1_qq: str, player2_qq: str = None, is_solo: bool = False) -> Tuple[bool, str]:
+        """加入支线活动"""
+        cursor = self.conn.cursor()
+
+        # 检查支线是否激活
+        active = self.get_active_event()
+        if not active or active['event_id'] != event_id:
+            return False, f"支线{event_id}未开启"
+
+        # 检查玩家是否已经在队伍中
+        cursor.execute('''
+            SELECT team_id FROM branch_teams
+            WHERE event_id = ? AND (player1_qq = ? OR player2_qq = ?)
+        ''', (event_id, player1_qq, player1_qq))
+        if cursor.fetchone():
+            return False, "你已经加入了支线队伍"
+
+        if player2_qq:
+            cursor.execute('''
+                SELECT team_id FROM branch_teams
+                WHERE event_id = ? AND (player1_qq = ? OR player2_qq = ?)
+            ''', (event_id, player2_qq, player2_qq))
+            if cursor.fetchone():
+                return False, "契约对象已经加入了支线队伍"
+
+        # 创建队伍
+        cursor.execute('''
+            INSERT INTO branch_teams (event_id, player1_qq, player2_qq, is_solo)
+            VALUES (?, ?, ?, ?)
+        ''', (event_id, player1_qq, player2_qq, 1 if is_solo else 0))
+        self.conn.commit()
+
+        return True, "成功加入支线"
+
+    def record_points(self, event_id: int, qq_id: str, points: int) -> Tuple[bool, str, int]:
+        """记录支线点数，返回奖励积分"""
+        cursor = self.conn.cursor()
+
+        # 查找玩家所在队伍
+        cursor.execute('''
+            SELECT team_id, player1_qq, player2_qq, is_solo, total_points
+            FROM branch_teams
+            WHERE event_id = ? AND (player1_qq = ? OR player2_qq = ?)
+        ''', (event_id, qq_id, qq_id))
+        team = cursor.fetchone()
+
+        if not team:
+            return False, "你没有加入支线队伍", 0
+
+        team_id, player1_qq, player2_qq, is_solo, old_points = team
+
+        # 更新点数
+        new_points = old_points + points
+        cursor.execute('''
+            UPDATE branch_teams SET total_points = ? WHERE team_id = ?
+        ''', (new_points, team_id))
+        self.conn.commit()
+
+        # 计算奖励：每10点给5积分
+        reward = (points // 10) * 5
+
+        return True, f"记录{points}点，总计{new_points}点", reward
+
+    def get_team_by_player(self, event_id: int, qq_id: str) -> Optional[Dict]:
+        """根据玩家获取其队伍信息"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT team_id, player1_qq, player2_qq, is_solo, total_points
+            FROM branch_teams
+            WHERE event_id = ? AND (player1_qq = ? OR player2_qq = ?)
+        ''', (event_id, qq_id, qq_id))
+        row = cursor.fetchone()
+        if row:
+            return {
+                'team_id': row[0],
+                'player1_qq': row[1],
+                'player2_qq': row[2],
+                'is_solo': row[3],
+                'total_points': row[4]
+            }
+        return None
+
+    def get_all_teams(self, event_id: int) -> List[Dict]:
+        """获取支线所有队伍"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT team_id, player1_qq, player2_qq, is_solo, total_points
+            FROM branch_teams
+            WHERE event_id = ?
+            ORDER BY total_points DESC
+        ''', (event_id,))
+        teams = []
+        for row in cursor.fetchall():
+            teams.append({
+                'team_id': row[0],
+                'player1_qq': row[1],
+                'player2_qq': row[2],
+                'is_solo': row[3],
+                'total_points': row[4]
+            })
+        return teams

@@ -26,7 +26,7 @@ from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush, QCursor, QActio
 from database.schema import init_database
 from database.dao import (
     PlayerDAO, PositionDAO, ShopDAO, AchievementDAO,
-    InventoryDAO, GameStateDAO, GemPoolDAO, ContractDAO, CustomCommandDAO
+    InventoryDAO, GameStateDAO, GemPoolDAO, ContractDAO, CustomCommandDAO, BranchEventDAO
 )
 from data.board_config import BOARD_DATA, COLUMN_HEIGHTS, VALID_COLUMNS
 from datetime import datetime, timedelta
@@ -381,6 +381,7 @@ class GMWindow(QMainWindow):
         self.gem_dao = GemPoolDAO(self.db_conn)
         self.contract_dao = ContractDAO(self.db_conn)
         self.custom_cmd_dao = CustomCommandDAO(self.db_conn)
+        self.branch_event_dao = BranchEventDAO(self.db_conn)
         self._update_window_title()
 
     def _update_window_title(self):
@@ -1063,6 +1064,48 @@ class GMWindow(QMainWindow):
 
         gem_list_group.setLayout(gem_list_layout)
         left_layout.addWidget(gem_list_group)
+
+        # 支线管理
+        branch_group = QGroupBox("🎯 支线管理")
+        branch_layout = QVBoxLayout()
+
+        # 当前支线状态
+        self.branch_status_label = QLabel("当前无支线")
+        self.branch_status_label.setStyleSheet("font-weight: bold;")
+        branch_layout.addWidget(self.branch_status_label)
+
+        # 开启支线
+        start_branch_layout = QHBoxLayout()
+        start_branch_layout.addWidget(QLabel("支线ID:"))
+        self.branch_id_input = QSpinBox()
+        self.branch_id_input.setRange(1, 99)
+        self.branch_id_input.setValue(1)
+        start_branch_layout.addWidget(self.branch_id_input)
+
+        start_branch_btn = QPushButton("开启支线")
+        start_branch_btn.clicked.connect(self._start_branch_event)
+        start_branch_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        start_branch_layout.addWidget(start_branch_btn)
+        branch_layout.addLayout(start_branch_layout)
+
+        # 结束支线
+        end_branch_btn = QPushButton("结束支线（发放第一名奖励）")
+        end_branch_btn.clicked.connect(self._end_branch_event)
+        end_branch_btn.setStyleSheet("background-color: #FF5722; color: white;")
+        branch_layout.addWidget(end_branch_btn)
+
+        # 支线队伍列表
+        self.branch_teams_display = QTextEdit()
+        self.branch_teams_display.setReadOnly(True)
+        self.branch_teams_display.setMaximumHeight(150)
+        branch_layout.addWidget(self.branch_teams_display)
+
+        refresh_branch_btn = QPushButton("刷新支线状态")
+        refresh_branch_btn.clicked.connect(self._refresh_branch_status)
+        branch_layout.addWidget(refresh_branch_btn)
+
+        branch_group.setLayout(branch_layout)
+        left_layout.addWidget(branch_group)
 
         left_layout.addStretch()
 
@@ -2570,6 +2613,115 @@ QQ号: {player.qq_id}
 
         self.gem_list_display.setText(text)
 
+    def _refresh_branch_status(self):
+        """刷新支线状态"""
+        active = self.branch_event_dao.get_active_event()
+
+        if not active:
+            self.branch_status_label.setText("当前无支线")
+            self.branch_teams_display.setText("")
+            return
+
+        event_id = active['event_id']
+        self.branch_status_label.setText(f"🎯 支线{event_id}进行中（主线已锁定）")
+
+        # 获取队伍列表
+        teams = self.branch_event_dao.get_all_teams(event_id)
+        if not teams:
+            self.branch_teams_display.setText("暂无队伍加入")
+            return
+
+        text = f"共 {len(teams)} 个队伍:\n\n"
+        for i, team in enumerate(teams, 1):
+            player1 = self.player_dao.get_player(team['player1_qq'])
+            p1_name = player1.nickname if player1 else team['player1_qq']
+
+            if team['player2_qq']:
+                player2 = self.player_dao.get_player(team['player2_qq'])
+                p2_name = player2.nickname if player2 else team['player2_qq']
+                team_str = f"{p1_name} & {p2_name}"
+            else:
+                team_str = f"{p1_name}（单人）"
+
+            text += f"#{i} {team_str}: {team['total_points']}点\n"
+
+        self.branch_teams_display.setText(text)
+
+    def _start_branch_event(self):
+        """开启支线活动"""
+        event_id = self.branch_id_input.value()
+
+        success, msg = self.branch_event_dao.start_event(event_id)
+        if success:
+            QMessageBox.information(self, "成功", f"支线{event_id}已开启！\n全员主线已锁定。")
+            self._refresh_branch_status()
+            self._log(f"开启支线{event_id}")
+        else:
+            QMessageBox.warning(self, "失败", msg)
+
+    def _end_branch_event(self):
+        """结束支线活动"""
+        active = self.branch_event_dao.get_active_event()
+        if not active:
+            QMessageBox.warning(self, "提示", "当前没有进行中的支线")
+            return
+
+        event_id = active['event_id']
+
+        reply = QMessageBox.question(
+            self,
+            "确认结束",
+            f"确定要结束支线{event_id}吗？\n将发放第一名20积分奖励并解锁主线。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        success, msg, rankings = self.branch_event_dao.end_event(event_id)
+        if not success:
+            QMessageBox.warning(self, "失败", msg)
+            return
+
+        # 发放第一名奖励
+        result_msg = f"支线{event_id}已结束！\n\n"
+        if rankings:
+            first = rankings[0]
+            # 给队伍成员发放奖励
+            self.player_dao.add_score(first['player1_qq'], 20)
+            p1 = self.player_dao.get_player(first['player1_qq'])
+            p1_name = p1.nickname if p1 else first['player1_qq']
+
+            if first['player2_qq']:
+                self.player_dao.add_score(first['player2_qq'], 20)
+                p2 = self.player_dao.get_player(first['player2_qq'])
+                p2_name = p2.nickname if p2 else first['player2_qq']
+                result_msg += f"🏆 第一名: {p1_name} & {p2_name}\n"
+                result_msg += f"   点数: {first['total_points']}点\n"
+                result_msg += f"   奖励: 每人+20积分\n\n"
+            else:
+                result_msg += f"🏆 第一名: {p1_name}（单人）\n"
+                result_msg += f"   点数: {first['total_points']}点\n"
+                result_msg += f"   奖励: +20积分\n\n"
+
+            result_msg += "完整排名:\n"
+            for r in rankings:
+                p1 = self.player_dao.get_player(r['player1_qq'])
+                p1_name = p1.nickname if p1 else r['player1_qq']
+                if r['player2_qq']:
+                    p2 = self.player_dao.get_player(r['player2_qq'])
+                    p2_name = p2.nickname if p2 else r['player2_qq']
+                    result_msg += f"  #{r['rank']} {p1_name} & {p2_name}: {r['total_points']}点\n"
+                else:
+                    result_msg += f"  #{r['rank']} {p1_name}: {r['total_points']}点\n"
+        else:
+            result_msg += "无队伍参加"
+
+        QMessageBox.information(self, "支线结束", result_msg)
+        self._refresh_branch_status()
+        self._log(f"结束支线{event_id}")
+
     def _refresh_first_achievements(self):
         """刷新首达记录"""
         cursor = self.db_conn.cursor()
@@ -2949,6 +3101,7 @@ QQ号: {player.qq_id}
         self._refresh_map_player_filter()
         self._refresh_gem_list()
         self._refresh_first_achievements()
+        self._refresh_branch_status()
 
         if self.selected_qq_id:
             self._update_control_status(self.selected_qq_id)

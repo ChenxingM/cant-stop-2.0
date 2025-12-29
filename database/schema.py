@@ -465,6 +465,33 @@ class DatabaseSchema:
         )
         ''')
 
+        # ==================== 支线活动表 ====================
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS branch_events (
+            event_id INTEGER PRIMARY KEY,
+            event_name TEXT,
+            is_active INTEGER DEFAULT 0,
+            started_at TIMESTAMP,
+            ended_at TIMESTAMP
+        )
+        ''')
+
+        # ==================== 支线队伍表 ====================
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS branch_teams (
+            team_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            player1_qq TEXT NOT NULL,
+            player2_qq TEXT,
+            is_solo INTEGER DEFAULT 0,
+            total_points INTEGER DEFAULT 0,
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (event_id) REFERENCES branch_events(event_id),
+            FOREIGN KEY (player1_qq) REFERENCES players(qq_id),
+            FOREIGN KEY (player2_qq) REFERENCES players(qq_id)
+        )
+        ''')
+
         conn.commit()
 
     @staticmethod
