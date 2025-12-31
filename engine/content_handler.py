@@ -962,7 +962,7 @@ class ContentHandler:
         if choice is None:
             return ContentResult(True,
                                f"📖 {encounter_name}\n\n"
-                               f"\"打…打打打…劫！\"\"玩了这么久渴了吧\"\"给pl来一杯卡布奇诺\"",
+                               f"\"玩了这么久渴了吧\"\"给pl来一杯卡布奇诺\"",
                                requires_input=True,
                                choices=["喝", "不喝"])
 
@@ -2122,12 +2122,14 @@ class ContentHandler:
             23: self._use_ice_statue,           # 冰人雕像
             24: self._use_soul_leaf,            # 灵魂之叶
             # 隐藏道具
+            9001: self._use_regret_ticket,      # 后悔券
             9103: self._use_free_roll_ticket,   # 免费掷骰券
             9111: self._use_red_rose,           # 红玫瑰
             9112: self._use_blue_rose,          # 蓝玫瑰
             9113: self._use_yellow_rose,        # 黄玫瑰
             9116: self._use_underworld_lyre,    # 冥府里拉琴
             9107: self._use_flashlight,         # 手电筒
+            9105: self._use_nitro_booster,      # 氮气加速器
         }
 
         handler = item_handlers.get(item_id)
@@ -2892,6 +2894,23 @@ class ContentHandler:
                            f"你点亮手电筒，光束在黑暗中划出耀眼的轨迹...\n\n"
                            f"投掷3d6 = {dice_rolls}\n"
                            f"你的积分+{bonus_score}")
+
+    def _use_nitro_booster(self, qq_id: str, **kwargs) -> ContentResult:
+        """隐藏道具9105: 氮气加速器 - 下一回合可选择一枚骰子+3"""
+        return ContentResult(True,
+                           "🚀 使用氮气加速器！\n"
+                           "强大的推进力量蓄势待发...\n\n"
+                           "你的下一回合可以选择任意一枚骰子使其数值+3\n"
+                           "💡 投掷后使用指令：骰子加3:位置（例如：骰子加3:1）",
+                           {'next_dice_add_3_any': True})
+
+    def _use_regret_ticket(self, qq_id: str, **kwargs) -> ContentResult:
+        """隐藏道具9001: 后悔券 - 重新投掷骰子"""
+        return ContentResult(True,
+                           "🎫 使用后悔券！\n"
+                           "财神的恩赐让你获得了一次重来的机会...\n\n"
+                           "清空当前骰子结果，可以重新投掷骰子（.r6d6）",
+                           {'clear_round': True, 'allow_reroll': True})
 
     # ==================== 隐藏成就检测 ====================
 

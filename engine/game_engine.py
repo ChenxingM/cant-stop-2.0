@@ -320,6 +320,14 @@ class GameEngine:
         if not state.current_round_active:
             return GameResult(False, "请先输入【轮次开始】")
 
+        # 检查是否已投掷骰子但未选择组合（禁止重复投掷）
+        # 允许重投的情况：allow_reroll 为 True（道具效果）
+        if state.last_dice_result and not state.allow_reroll:
+            return GameResult(False, "⚠️ 您已投掷过骰子，请先选择组合记录数值，或结束轮次！\n"
+                                    f"当前骰子：{state.last_dice_result}\n"
+                                    "• 记录数值：7 11（记录两个数值）\n"
+                                    "• 结束轮次：输入【轮次结束】或【放弃轮次】")
+
         # 检查积分是否足够投骰（必须 >= 10）
         player = self.player_dao.get_player(qq_id)
         if player.current_score < 10:
@@ -992,10 +1000,7 @@ class GameEngine:
 
     def end_round_active(self, qq_id: str) -> GameResult:
         """主动结束轮次（替换永久棋子）"""
-        # 检查是否被锁定
-        lockout_result = self._check_lockout(qq_id)
-        if lockout_result:
-            return lockout_result
+        # 注意：被锁定时仍可保存棋子，不检查锁定状态
 
         state = self.state_dao.get_state(qq_id)
 
@@ -3415,17 +3420,19 @@ class GameEngine:
                 )
             elif rank == 4:
                 result_msg = (
-                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+                    "游戏第四\n"
+                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n"
                     "★✦恭喜您第四通关游戏✦★\n"
                     f"获得成就：{rank_names[rank]}\n"
-                    f"{real_reward_4_5}"
+                    "获得奖励：没有捏～～～"
                 )
             else:  # rank == 5
                 result_msg = (
-                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n\n"
+                    "游戏第五\n"
+                    "掌声通过隐藏音响传来，全息投影跳出\"恭喜通关\"的电子贺卡……\n"
                     "★✦恭喜您第五通关游戏✦★\n"
                     f"获得成就：{rank_names[rank]}\n"
-                    f"{real_reward_4_5}"
+                    "获得奖励：没有捏～～～"
                 )
 
             if extra_messages:
