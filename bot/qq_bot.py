@@ -285,6 +285,13 @@ class QQBot:
         if not text_message:
             return
 
+        # 管理员专用：SQL 调试命令
+        if text_message.strip().upper().startswith('SQL:'):
+            response = await self._handle_admin_sql(user_id, text_message.strip())
+            if response:
+                await self.send_group_message(str(group_id), response, at_qq=user_id)
+            return
+
         # 清理并解析指令
         cleaned_text = CommandParser.clean_input(text_message)
         command = CommandParser.parse(cleaned_text)
@@ -372,6 +379,58 @@ class QQBot:
         except Exception as e:
             logger.error(f"执行指令失败: {e}", exc_info=True)
             return f"指令执行失败: {str(e)}"
+
+    async def _handle_admin_sql(self, user_id: str, text: str) -> Optional[str]:
+        """处理管理员 SQL 调试命令
+
+        格式: SQL:SELECT * FROM players
+        仅限 admin_qq 使用
+        """
+        # 检查是否是管理员
+        if not self.config.admin_qq or user_id != self.config.admin_qq:
+            return "❌ 权限不足：此命令仅限管理员使用"
+
+        # 提取 SQL 语句
+        sql = text[4:].strip()  # 去掉 "SQL:" 前缀
+        if not sql:
+            return "❌ 请输入 SQL 语句\n格式: SQL:SELECT * FROM players"
+
+        logger.warning(f"[管理员SQL] {user_id} 执行: {sql}")
+
+        try:
+            cursor = self.db_conn.cursor()
+            cursor.execute(sql)
+
+            # 判断是查询还是修改操作
+            if sql.strip().upper().startswith('SELECT'):
+                rows = cursor.fetchall()
+                if not rows:
+                    return "✅ 查询成功，无结果"
+
+                # 获取列名
+                col_names = [desc[0] for desc in cursor.description]
+
+                # 格式化输出（限制行数避免消息过长）
+                max_rows = 10
+                result_lines = [f"📊 查询结果 ({len(rows)} 行):"]
+                result_lines.append(" | ".join(col_names))
+                result_lines.append("-" * 40)
+
+                for i, row in enumerate(rows[:max_rows]):
+                    result_lines.append(" | ".join(str(v) for v in row))
+
+                if len(rows) > max_rows:
+                    result_lines.append(f"... 还有 {len(rows) - max_rows} 行未显示")
+
+                return "\n".join(result_lines)
+            else:
+                # INSERT/UPDATE/DELETE 等修改操作
+                self.db_conn.commit()
+                return f"✅ 执行成功，影响 {cursor.rowcount} 行"
+
+        except Exception as e:
+            self.db_conn.rollback()
+            return f"❌ SQL 执行失败: {str(e)}"
 
     async def send_group_message(self, group_id: str, message: str, at_qq: Optional[str] = None):
         """发送群消息（通过WebSocket）
