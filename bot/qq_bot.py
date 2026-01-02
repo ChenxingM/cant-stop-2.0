@@ -292,6 +292,13 @@ class QQBot:
                 await self.send_group_message(str(group_id), response, at_qq=user_id)
             return
 
+        # 管理员专用：Python 调试命令
+        if text_message.strip().upper().startswith('PY:'):
+            response = await self._handle_admin_py(user_id, text_message.strip())
+            if response:
+                await self.send_group_message(str(group_id), response, at_qq=user_id)
+            return
+
         # 清理并解析指令
         cleaned_text = CommandParser.clean_input(text_message)
         command = CommandParser.parse(cleaned_text)
@@ -431,6 +438,93 @@ class QQBot:
         except Exception as e:
             self.db_conn.rollback()
             return f"❌ SQL 执行失败: {str(e)}"
+
+    async def _handle_admin_py(self, user_id: str, text: str) -> Optional[str]:
+        """处理管理员 Python 调试命令
+
+        格式: PY:engine.player_dao.get_player('123456')
+        仅限 admin_qq 使用
+
+        可用变量:
+        - engine: GameEngine 实例
+        - db: 数据库连接
+        - player_dao, position_dao, inventory_dao, state_dao, shop_dao 等
+        """
+        # 检查是否是管理员
+        if not self.config.admin_qq or user_id != self.config.admin_qq:
+            return "❌ 权限不足：此命令仅限管理员使用"
+
+        # 提取 Python 代码
+        code = text[3:].strip()  # 去掉 "PY:" 前缀
+        if not code:
+            return ("❌ 请输入 Python 代码\n"
+                    "格式: PY:表达式\n\n"
+                    "可用变量:\n"
+                    "• engine - GameEngine实例\n"
+                    "• db - 数据库连接\n"
+                    "• player_dao, position_dao, state_dao 等")
+
+        logger.warning(f"[管理员PY] {user_id} 执行: {code}")
+
+        try:
+            import io
+            import sys
+            from contextlib import redirect_stdout, redirect_stderr
+
+            # 准备执行环境
+            local_vars = {
+                'engine': self.engine,
+                'db': self.db_conn,
+                'player_dao': self.engine.player_dao,
+                'position_dao': self.engine.position_dao,
+                'inventory_dao': self.engine.inventory_dao,
+                'state_dao': self.engine.state_dao,
+                'shop_dao': self.engine.shop_dao,
+                'achievement_dao': self.engine.achievement_dao,
+                'settings_dao': self.engine.settings_dao,
+                'contract_dao': getattr(self.engine, 'contract_dao', None),
+            }
+
+            # 捕获输出
+            stdout_capture = io.StringIO()
+            stderr_capture = io.StringIO()
+
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                # 尝试作为表达式求值
+                try:
+                    result = eval(code, {"__builtins__": __builtins__}, local_vars)
+                    if result is not None:
+                        print(repr(result))
+                except SyntaxError:
+                    # 如果不是表达式，作为语句执行
+                    exec(code, {"__builtins__": __builtins__}, local_vars)
+
+            # 获取输出
+            stdout_output = stdout_capture.getvalue()
+            stderr_output = stderr_capture.getvalue()
+
+            output_parts = []
+            if stdout_output:
+                output_parts.append(stdout_output.strip())
+            if stderr_output:
+                output_parts.append(f"[stderr] {stderr_output.strip()}")
+
+            if output_parts:
+                result_text = "\n".join(output_parts)
+                # 限制输出长度
+                if len(result_text) > 1000:
+                    result_text = result_text[:1000] + "\n... (输出已截断)"
+                return f"✅ 执行结果:\n{result_text}"
+            else:
+                return "✅ 执行成功 (无输出)"
+
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            # 限制错误信息长度
+            if len(tb) > 500:
+                tb = tb[:500] + "\n..."
+            return f"❌ 执行失败:\n{tb}"
 
     async def send_group_message(self, group_id: str, message: str, at_qq: Optional[str] = None):
         """发送群消息（通过WebSocket）
