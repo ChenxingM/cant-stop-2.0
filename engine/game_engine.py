@@ -1925,12 +1925,9 @@ class GameEngine:
         current_time = int(time.time())
 
         if current_time - start_time > timeout:
-            # 对决已超时，清理状态并退回积分
+            # 对决已超时，清理状态（不退回积分）
             challenger_qq = state.pending_duel.get('challenger_qq')
             target_qq = state.pending_duel.get('target_qq')
-
-            # 退回挑战者积分
-            self.player_dao.add_score(challenger_qq, 10)
 
             # 清除双方状态
             state.pending_duel = None
@@ -1945,9 +1942,9 @@ class GameEngine:
             challenger = self.player_dao.get_player(challenger_qq)
             challenger_name = challenger.nickname if challenger else challenger_qq
 
-            print(f"[Poke对决] 超时自动取消: {challenger_qq} 的挑战已过期，积分已退回")
+            print(f"[Poke对决] 超时自动取消: {challenger_qq} 的挑战已过期")
 
-            return True, f"⏰ Poke对决已超时取消！\n{challenger_name} 的 10 积分已退回"
+            return True, f"⏰ Poke对决已超时取消！\n{challenger_name} 的 10 积分已扣除"
 
         return False, ""
 
@@ -1960,7 +1957,7 @@ class GameEngine:
         # 先检查对决是否已超时
         is_expired, expired_msg = self._check_and_clear_expired_duel(qq_id)
         if is_expired:
-            return GameResult(True, expired_msg + "\n（已自动取消）")
+            return GameResult(True, expired_msg)
 
         state = self.state_dao.get_state(qq_id)
 
@@ -1978,10 +1975,7 @@ class GameEngine:
 
         target_qq = state.pending_duel.get('target_qq')
 
-        # 退回挑战者积分
-        self.player_dao.add_score(qq_id, 10)
-
-        # 清除双方状态
+        # 清除双方状态（不退回积分）
         state.pending_duel = None
         self.state_dao.update_state(state)
 
@@ -1993,11 +1987,11 @@ class GameEngine:
         player = self.player_dao.get_player(qq_id)
         player_name = player.nickname if player else qq_id
 
-        print(f"[Poke对决] {qq_id}({player_name}) 取消挑战，积分已退回")
+        print(f"[Poke对决] {qq_id}({player_name}) 取消挑战")
 
         return GameResult(True,
             f"✅ 已取消Poke对决挑战\n"
-            f"💰 {player_name} 的 10 积分已退回")
+            f"💸 {player_name} 的 10 积分已扣除（不退回）")
 
     def thanks_fortune(self, qq_id: str) -> GameResult:
         """玩家回复"谢谢财神"获得额外奖励
