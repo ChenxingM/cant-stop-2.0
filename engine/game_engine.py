@@ -829,7 +829,7 @@ class GameEngine:
 
         # 检查临时标记数量限制
         temp_columns = set(p.column_number for p in temp_positions)
-        new_columns = [v for v in values if v not in temp_columns]
+        new_columns = set(v for v in values if v not in temp_columns)  # 使用set去重，10,10只算1个新列
 
         print(f"[record_values] {qq_id}: 当前临时列={temp_columns}, 新列={new_columns}, 总数={len(temp_columns) + len(new_columns)}")
 
