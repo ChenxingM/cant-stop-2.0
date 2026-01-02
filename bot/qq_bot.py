@@ -552,27 +552,43 @@ class QQBot:
                 "data": {"text": " "}  # @后面加个空格
             })
 
-        # 检查消息中是否有图片标记 [IMAGE:path]
+        # 检查消息中是否有AT标记 [AT:QQ号] 和图片标记 [IMAGE:path]
         import re
         from pathlib import Path
 
+        # 先处理 AT 和 IMAGE 标记
+        at_pattern = r'\[AT:(\d+)\]'
         image_pattern = r'\[IMAGE:([^\]]+)\]'
-        parts = re.split(image_pattern, message)
 
-        for i, part in enumerate(parts):
-            if i % 2 == 0:
-                # 文本部分
-                if part.strip():
-                    message_segments.append({
-                        "type": "text",
-                        "data": {"text": part}
-                    })
-            else:
-                # 图片路径部分
-                image_path = Path(part)
+        # 合并匹配 AT 和 IMAGE
+        combined_pattern = r'(\[AT:\d+\]|\[IMAGE:[^\]]+\])'
+        parts = re.split(combined_pattern, message)
+
+        for part in parts:
+            if not part:
+                continue
+
+            # 检查是否是 AT 标记
+            at_match = re.match(at_pattern, part)
+            if at_match:
+                qq_id = at_match.group(1)
+                message_segments.append({
+                    "type": "at",
+                    "data": {"qq": qq_id}
+                })
+                message_segments.append({
+                    "type": "text",
+                    "data": {"text": " "}  # @后面加个空格
+                })
+                continue
+
+            # 检查是否是 IMAGE 标记
+            image_match = re.match(image_pattern, part)
+            if image_match:
+                image_path = Path(image_match.group(1))
                 if not image_path.is_absolute():
                     # 相对路径转绝对路径
-                    image_path = get_base_path() / part
+                    image_path = get_base_path() / image_match.group(1)
 
                 if image_path.exists():
                     # 使用 file:// 协议发送本地图片
@@ -585,8 +601,16 @@ class QQBot:
                     logger.warning(f"图片文件不存在: {image_path}")
                     message_segments.append({
                         "type": "text",
-                        "data": {"text": f"[图片加载失败: {part}]"}
+                        "data": {"text": f"[图片加载失败: {image_match.group(1)}]"}
                     })
+                continue
+
+            # 普通文本部分
+            if part.strip():
+                message_segments.append({
+                    "type": "text",
+                    "data": {"text": part}
+                })
 
         # OneBot v11 WebSocket API 格式
         action_data = {
@@ -599,8 +623,9 @@ class QQBot:
 
         try:
             await self.ws.send_json(action_data)
-            # 完整输出消息内容，图片路径替换为[图片]标记
-            text_full = re.sub(image_pattern, '[图片]', message)
+            # 完整输出消息内容，AT和图片标记替换为可读形式
+            text_full = re.sub(at_pattern, r'[@\1]', message)
+            text_full = re.sub(image_pattern, '[图片]', text_full)
             logger.info(f"[发送群消息] 群{group_id}\n{text_full}")
         except Exception as e:
             logger.error(f"发送消息异常: {e}")

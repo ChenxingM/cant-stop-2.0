@@ -1838,6 +1838,7 @@ class GameEngine:
         print(f"[Poke对决] {challenger_qq} vs {qq_id}: 双方已投入积分，等待投骰决胜")
 
         return GameResult(True,
+            f"[AT:1760238600][AT:{challenger_qq}][AT:{qq_id}]\n"
             f"🎲 Poke骰对决开始！\n\n"
             f"⚔️ {challenger_name} vs {responder_name}\n"
             f"💰 双方各投入 10 积分，奖池共 20 积分\n\n"
