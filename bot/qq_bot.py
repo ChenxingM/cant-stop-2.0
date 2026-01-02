@@ -473,16 +473,16 @@ class QQBot:
 
             # 准备执行环境
             local_vars = {
-                'engine': self.engine,
+                'engine': self.game_engine,
                 'db': self.db_conn,
-                'player_dao': self.engine.player_dao,
-                'position_dao': self.engine.position_dao,
-                'inventory_dao': self.engine.inventory_dao,
-                'state_dao': self.engine.state_dao,
-                'shop_dao': self.engine.shop_dao,
-                'achievement_dao': self.engine.achievement_dao,
-                'settings_dao': self.engine.settings_dao,
-                'contract_dao': getattr(self.engine, 'contract_dao', None),
+                'player_dao': self.game_engine.player_dao,
+                'position_dao': self.game_engine.position_dao,
+                'inventory_dao': self.game_engine.inventory_dao,
+                'state_dao': self.game_engine.state_dao,
+                'shop_dao': self.game_engine.shop_dao,
+                'achievement_dao': self.game_engine.achievement_dao,
+                'settings_dao': self.game_engine.settings_dao,
+                'contract_dao': getattr(self.game_engine, 'contract_dao', None),
             }
 
             # 捕获输出
