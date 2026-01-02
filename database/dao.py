@@ -1385,3 +1385,59 @@ class BranchEventDAO:
                 'total_points': row[4]
             })
         return teams
+
+
+class GameSettingsDAO:
+    """游戏设置数据访问对象"""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+        """获取设置值"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT setting_value FROM game_settings WHERE setting_key = ?', (key,))
+        row = cursor.fetchone()
+        if row:
+            return row[0]
+        return default
+
+    def get_int_setting(self, key: str, default: int = 0) -> int:
+        """获取整数类型的设置值"""
+        value = self.get_setting(key)
+        if value is not None:
+            try:
+                return int(value)
+            except ValueError:
+                return default
+        return default
+
+    def set_setting(self, key: str, value: str, description: str = None):
+        """设置值"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO game_settings (setting_key, setting_value, description, updated_at)
+            VALUES (?, ?, COALESCE(?, (SELECT description FROM game_settings WHERE setting_key = ?)), CURRENT_TIMESTAMP)
+        ''', (key, value, description, key))
+        self.conn.commit()
+
+    def get_all_settings(self) -> Dict[str, Dict]:
+        """获取所有设置"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT setting_key, setting_value, description, updated_at FROM game_settings')
+        settings = {}
+        for row in cursor.fetchall():
+            settings[row[0]] = {
+                'value': row[1],
+                'description': row[2],
+                'updated_at': row[3]
+            }
+        return settings
+
+    def get_roll_cost(self) -> int:
+        """获取每轮掷骰子消耗的积分"""
+        return self.get_int_setting('roll_cost', 10)
+
+    def set_roll_cost(self, cost: int):
+        """设置每轮掷骰子消耗的积分"""
+        self.set_setting('roll_cost', str(cost), '每轮掷骰子消耗的积分')

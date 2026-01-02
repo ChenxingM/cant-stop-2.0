@@ -26,7 +26,8 @@ from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush, QCursor, QActio
 from database.schema import init_database
 from database.dao import (
     PlayerDAO, PositionDAO, ShopDAO, AchievementDAO,
-    InventoryDAO, GameStateDAO, GemPoolDAO, ContractDAO, CustomCommandDAO, BranchEventDAO
+    InventoryDAO, GameStateDAO, GemPoolDAO, ContractDAO, CustomCommandDAO, BranchEventDAO,
+    GameSettingsDAO
 )
 from data.board_config import BOARD_DATA, COLUMN_HEIGHTS, VALID_COLUMNS
 from datetime import datetime, timedelta
@@ -382,6 +383,7 @@ class GMWindow(QMainWindow):
         self.contract_dao = ContractDAO(self.db_conn)
         self.custom_cmd_dao = CustomCommandDAO(self.db_conn)
         self.branch_event_dao = BranchEventDAO(self.db_conn)
+        self.settings_dao = GameSettingsDAO(self.db_conn)
         self._update_window_title()
 
     def _update_window_title(self):
@@ -1200,6 +1202,30 @@ class GMWindow(QMainWindow):
 
         reload_group.setLayout(reload_layout)
         right_layout.addWidget(reload_group)
+
+        # 游戏设置
+        settings_group = QGroupBox("⚙️ 游戏设置")
+        settings_layout = QGridLayout()
+
+        # 掷骰消耗积分设置
+        settings_layout.addWidget(QLabel("每轮掷骰消耗:"), 0, 0)
+        self.roll_cost_input = QSpinBox()
+        self.roll_cost_input.setRange(0, 100)
+        self.roll_cost_input.setValue(self.settings_dao.get_roll_cost())
+        self.roll_cost_input.setSuffix(" 积分")
+        settings_layout.addWidget(self.roll_cost_input, 0, 1)
+
+        save_settings_btn = QPushButton("保存设置")
+        save_settings_btn.clicked.connect(self._save_game_settings)
+        save_settings_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        settings_layout.addWidget(save_settings_btn, 1, 0, 1, 2)
+
+        settings_info = QLabel("提示: 修改后立即生效，影响所有玩家")
+        settings_info.setStyleSheet("color: #666; font-size: 10px;")
+        settings_layout.addWidget(settings_info, 2, 0, 1, 2)
+
+        settings_group.setLayout(settings_layout)
+        right_layout.addWidget(settings_group)
 
         right_layout.addStretch()
 
@@ -2888,6 +2914,18 @@ QQ号: {player.qq_id}
             )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"重新加载失败: {str(e)}\n\n已加载: {', '.join(modules_to_reload)}")
+
+    # ==================== 游戏设置操作 ====================
+
+    def _save_game_settings(self):
+        """保存游戏设置"""
+        try:
+            roll_cost = self.roll_cost_input.value()
+            self.settings_dao.set_roll_cost(roll_cost)
+            self._log(f"游戏设置已保存: 每轮掷骰消耗 = {roll_cost} 积分")
+            QMessageBox.information(self, "成功", f"游戏设置已保存\n每轮掷骰消耗: {roll_cost} 积分")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存设置失败: {str(e)}")
 
     # ==================== 契约管理操作 ====================
 

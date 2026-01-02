@@ -492,6 +492,16 @@ class DatabaseSchema:
         )
         ''')
 
+        # ==================== 游戏设置表 ====================
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS game_settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_value TEXT NOT NULL,
+            description TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+
         conn.commit()
 
     @staticmethod
@@ -565,6 +575,24 @@ class DatabaseSchema:
             cursor.execute('''
                 UPDATE shop_items SET description = ?, player_limit = ? WHERE item_id = ?
             ''', (description, player_limit, item_id))
+
+        conn.commit()
+
+    @staticmethod
+    def initialize_game_settings(conn: sqlite3.Connection):
+        """初始化游戏设置"""
+        cursor = conn.cursor()
+
+        # 默认游戏设置：(setting_key, setting_value, description)
+        default_settings = [
+            ('roll_cost', '10', '每轮掷骰子消耗的积分'),
+        ]
+
+        for key, value, desc in default_settings:
+            cursor.execute('''
+                INSERT OR IGNORE INTO game_settings (setting_key, setting_value, description)
+                VALUES (?, ?, ?)
+            ''', (key, value, desc))
 
         conn.commit()
 
@@ -697,6 +725,9 @@ def init_database(db_path: str = "data/game.db") -> sqlite3.Connection:
 
     # 初始化商店道具
     DatabaseSchema.initialize_shop_items(conn)
+
+    # 初始化游戏设置
+    DatabaseSchema.initialize_game_settings(conn)
 
     return conn
 

@@ -15,7 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.dao import (
     PlayerDAO, PositionDAO, InventoryDAO, GameStateDAO,
-    ShopDAO, AchievementDAO, DailyLimitDAO, CustomCommandDAO, BranchEventDAO
+    ShopDAO, AchievementDAO, DailyLimitDAO, CustomCommandDAO, BranchEventDAO,
+    GameSettingsDAO
 )
 from database.models import Player, Position, DAILY_LIMITS, ACHIEVEMENTS
 from data.board_config import BOARD_DATA, COLUMN_HEIGHTS, VALID_COLUMNS
@@ -45,6 +46,7 @@ class GameEngine:
         self.daily_dao = DailyLimitDAO(db_conn)
         self.custom_cmd_dao = CustomCommandDAO(db_conn)
         self.branch_event_dao = BranchEventDAO(db_conn)
+        self.settings_dao = GameSettingsDAO(db_conn)
         self.content_handler = ContentHandler(
             self.player_dao, self.inventory_dao, self.achievement_dao,
             self.position_dao, self.shop_dao, db_conn
@@ -336,7 +338,7 @@ class GameEngine:
         # 检查玩家是否被暂停
         if state.skipped_rounds > 0:
             # 暂停状态：扣除积分但不能投掷骰子
-            cost = 10  # 默认每回合10积分
+            cost = self.settings_dao.get_roll_cost()  # 从数据库读取每回合消耗积分
             self.player_dao.consume_score(qq_id, cost)
 
             # 减少暂停回合数
@@ -347,7 +349,7 @@ class GameEngine:
             return GameResult(False, f"⏸️ 您当前处于暂停状态，本回合无法投掷骰子\n已消耗{cost}积分{remaining_msg}")
 
         # 计算消耗积分（黑喵效果可减少消耗）
-        base_cost = 10  # 默认每回合10积分
+        base_cost = self.settings_dao.get_roll_cost()  # 从数据库读取每回合消耗积分
         cost = max(0, base_cost - state.cost_reduction)  # 黑喵效果减少消耗
 
         # 检查免费回合
