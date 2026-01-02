@@ -132,6 +132,11 @@ class CommandParser:
         'start_duel': r'^对决\s*@?(\d+)$',  # 对决@QQ号
         'respond_duel': r'^应战$',  # 被@的玩家应战
 
+        # Poke骰对决（玩家主动发起）
+        'start_poke_duel': r'^poke骰对决\s*@?(\d+)$',  # poke骰对决@QQ号
+        'accept_poke_duel': r'^接受挑战\s*@?(\d+)$',  # 接受挑战@QQ号
+        'claim_poke_victory': r'^对战胜利$',  # 对战胜利
+
         # 特殊功能
         'pet_cat': r'^摸摸喵$',
         'feed_cat': r'^投喂喵$',
@@ -321,6 +326,12 @@ class CommandParser:
         elif cmd_type == 'start_duel':
             params['target_qq'] = match.group(1).strip()
 
+        elif cmd_type == 'start_poke_duel':
+            params['target_qq'] = match.group(1).strip()
+
+        elif cmd_type == 'accept_poke_duel':
+            params['challenger_qq'] = match.group(1).strip()
+
         elif cmd_type == 'use_last_dice':
             params['dice_values'] = [int(match.group(1)), int(match.group(2)), int(match.group(3))]
 
@@ -460,6 +471,9 @@ COMMAND_HANDLERS = {
     'add_3_dice': 'add_3_dice',
     'start_duel': 'start_duel',
     'respond_duel': 'respond_duel',
+    'start_poke_duel': 'start_poke_duel',
+    'accept_poke_duel': 'accept_poke_duel',
+    'claim_poke_victory': 'claim_poke_victory',
     'thanks_fortune': 'thanks_fortune',
     'encounter_checkin': 'encounter_checkin',
     'claim_sideline': 'claim_sideline',

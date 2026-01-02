@@ -1712,6 +1712,178 @@ class GameEngine:
 
         return GameResult(True, result_msg)
 
+    # ==================== Poke骰对决系统 ====================
+
+    def start_poke_duel(self, qq_id: str, target_qq: str) -> GameResult:
+        """发起Poke骰对决（扣10积分）
+
+        Args:
+            qq_id: 发起对决的玩家QQ号
+            target_qq: 被挑战的玩家QQ号
+        """
+        # 检查不能和自己对决
+        if target_qq == qq_id:
+            return GameResult(False, "❌ 不能和自己对决！")
+
+        # 检查发起者是否存在
+        player = self.player_dao.get_player(qq_id)
+        if not player:
+            return GameResult(False, "❌ 请先注册")
+
+        # 检查目标玩家是否存在
+        target_player = self.player_dao.get_player(target_qq)
+        if not target_player:
+            return GameResult(False, f"❌ 玩家 {target_qq} 不存在")
+
+        # 检查发起者积分是否足够
+        if player.current_score < 10:
+            return GameResult(False, f"❌ 积分不足！需要10积分，当前积分：{player.current_score}")
+
+        # 检查发起者是否已有待处理的poke对决
+        state = self.state_dao.get_state(qq_id)
+        if state.pending_duel and state.pending_duel.get('duel_type') == 'poke':
+            return GameResult(False, "❌ 你已有一个待处理的Poke对决")
+
+        # 检查目标是否已有待处理的poke对决挑战
+        target_state = self.state_dao.get_state(target_qq)
+        if target_state.pending_duel and target_state.pending_duel.get('duel_type') == 'poke':
+            return GameResult(False, f"❌ {target_player.nickname} 已有一个待处理的Poke对决")
+
+        # 扣除发起者10积分
+        self.player_dao.add_score(qq_id, -10)
+
+        # 保存对决状态到发起者
+        state.pending_duel = {
+            'duel_type': 'poke',
+            'challenger_qq': qq_id,
+            'target_qq': target_qq,
+            'status': 'waiting_accept'
+        }
+        self.state_dao.update_state(state)
+
+        # 保存到目标玩家状态
+        target_state.pending_duel = {
+            'duel_type': 'poke',
+            'challenger_qq': qq_id,
+            'target_qq': target_qq,
+            'status': 'awaiting_accept'
+        }
+        self.state_dao.update_state(target_state)
+
+        player_name = player.nickname
+        target_name = target_player.nickname
+
+        print(f"[Poke对决] {qq_id}({player_name}) 向 {target_qq}({target_name}) 发起挑战")
+
+        return GameResult(True,
+            f"🎲 Poke骰对决！\n\n"
+            f"⚔️ {player_name} 向 {target_name} 发起挑战！\n"
+            f"💰 已投入 10 积分\n\n"
+            f"📢 {target_name}，请发送【接受挑战@{qq_id}】应战！")
+
+    def accept_poke_duel(self, qq_id: str, challenger_qq: str) -> GameResult:
+        """接受Poke骰对决（扣10积分）
+
+        Args:
+            qq_id: 接受挑战的玩家QQ号
+            challenger_qq: 发起挑战的玩家QQ号
+        """
+        # 检查玩家是否存在
+        player = self.player_dao.get_player(qq_id)
+        if not player:
+            return GameResult(False, "❌ 请先注册")
+
+        # 检查积分是否足够
+        if player.current_score < 10:
+            return GameResult(False, f"❌ 积分不足！需要10积分，当前积分：{player.current_score}")
+
+        # 检查是否有来自指定玩家的挑战
+        state = self.state_dao.get_state(qq_id)
+        if not state.pending_duel or state.pending_duel.get('duel_type') != 'poke':
+            return GameResult(False, "❌ 当前没有待接受的Poke对决")
+
+        if state.pending_duel.get('challenger_qq') != challenger_qq:
+            return GameResult(False, f"❌ 没有来自 {challenger_qq} 的挑战")
+
+        if state.pending_duel.get('status') != 'awaiting_accept':
+            return GameResult(False, "❌ 该对决已经处理过了")
+
+        # 扣除接受者10积分
+        self.player_dao.add_score(qq_id, -10)
+
+        # 获取玩家名称
+        challenger = self.player_dao.get_player(challenger_qq)
+        challenger_name = challenger.nickname if challenger else challenger_qq
+        responder_name = player.nickname
+
+        # 更新双方状态为进行中
+        challenger_state = self.state_dao.get_state(challenger_qq)
+
+        state.pending_duel = {
+            'duel_type': 'poke',
+            'status': 'in_progress',
+            'challenger_qq': challenger_qq,
+            'responder_qq': qq_id
+        }
+        challenger_state.pending_duel = {
+            'duel_type': 'poke',
+            'status': 'in_progress',
+            'challenger_qq': challenger_qq,
+            'responder_qq': qq_id
+        }
+
+        self.state_dao.update_state(state)
+        self.state_dao.update_state(challenger_state)
+
+        print(f"[Poke对决] {challenger_qq} vs {qq_id}: 双方已投入积分，等待投骰决胜")
+
+        return GameResult(True,
+            f"🎲 Poke骰对决开始！\n\n"
+            f"⚔️ {challenger_name} vs {responder_name}\n"
+            f"💰 双方各投入 10 积分，奖池共 20 积分\n\n"
+            f"📢 请双方投骰决胜，胜者发送【对战胜利】领取奖励！")
+
+    def claim_poke_victory(self, qq_id: str) -> GameResult:
+        """领取Poke骰对决胜利奖励（获得20积分）
+
+        Args:
+            qq_id: 领取奖励的玩家QQ号
+        """
+        state = self.state_dao.get_state(qq_id)
+
+        # 检查是否有进行中的poke对决
+        if not state.pending_duel or state.pending_duel.get('duel_type') != 'poke':
+            return GameResult(False, "❌ 当前没有进行中的Poke对决")
+
+        if state.pending_duel.get('status') != 'in_progress':
+            return GameResult(False, "❌ 对决尚未开始或已结束")
+
+        # 发放奖励
+        self.player_dao.add_score(qq_id, 20)
+
+        # 清除双方状态
+        challenger_qq = state.pending_duel.get('challenger_qq')
+        responder_qq = state.pending_duel.get('responder_qq')
+
+        state.pending_duel = None
+        self.state_dao.update_state(state)
+
+        # 清除对方状态
+        other_qq = responder_qq if qq_id == challenger_qq else challenger_qq
+        if other_qq:
+            other_state = self.state_dao.get_state(other_qq)
+            other_state.pending_duel = None
+            self.state_dao.update_state(other_state)
+
+        player = self.player_dao.get_player(qq_id)
+        player_name = player.nickname if player else qq_id
+
+        print(f"[Poke对决] {qq_id}({player_name}) 领取胜利奖励 20 积分")
+
+        return GameResult(True,
+            f"🎉 恭喜 {player_name} 获得Poke骰对决胜利！\n"
+            f"💰 获得 20 积分奖励！")
+
     def thanks_fortune(self, qq_id: str) -> GameResult:
         """玩家回复"谢谢财神"获得额外奖励
 
