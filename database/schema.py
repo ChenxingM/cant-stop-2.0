@@ -586,6 +586,7 @@ class DatabaseSchema:
         # 默认游戏设置：(setting_key, setting_value, description)
         default_settings = [
             ('roll_cost', '10', '每轮掷骰子消耗的积分'),
+            ('duel_timeout', '300', 'Poke对决超时时间（秒），默认5分钟'),
         ]
 
         for key, value, desc in default_settings:

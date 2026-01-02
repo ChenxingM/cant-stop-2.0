@@ -1441,3 +1441,7 @@ class GameSettingsDAO:
     def set_roll_cost(self, cost: int):
         """设置每轮掷骰子消耗的积分"""
         self.set_setting('roll_cost', str(cost), '每轮掷骰子消耗的积分')
+
+    def get_duel_timeout(self) -> int:
+        """获取Poke对决超时时间（秒）"""
+        return self.get_int_setting('duel_timeout', 300)

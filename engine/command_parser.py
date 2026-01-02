@@ -136,6 +136,7 @@ class CommandParser:
         'start_poke_duel': r'^poke骰对决\s*@?(\d+)$',  # poke骰对决@QQ号
         'accept_poke_duel': r'^接受挑战\s*@?(\d+)$',  # 接受挑战@QQ号
         'claim_poke_victory': r'^对战胜利$',  # 对战胜利
+        'cancel_poke_duel': r'^取消挑战$',  # 取消挑战
 
         # 特殊功能
         'pet_cat': r'^摸摸喵$',
@@ -474,6 +475,7 @@ COMMAND_HANDLERS = {
     'start_poke_duel': 'start_poke_duel',
     'accept_poke_duel': 'accept_poke_duel',
     'claim_poke_victory': 'claim_poke_victory',
+    'cancel_poke_duel': 'cancel_poke_duel',
     'thanks_fortune': 'thanks_fortune',
     'encounter_checkin': 'encounter_checkin',
     'claim_sideline': 'claim_sideline',

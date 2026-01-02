@@ -1739,6 +1739,10 @@ class GameEngine:
         if player.current_score < 10:
             return GameResult(False, f"❌ 积分不足！需要10积分，当前积分：{player.current_score}")
 
+        # 先清理双方可能已过期的对决
+        self._check_and_clear_expired_duel(qq_id)
+        self._check_and_clear_expired_duel(target_qq)
+
         # 检查发起者是否已有待处理的poke对决
         state = self.state_dao.get_state(qq_id)
         if state.pending_duel and state.pending_duel.get('duel_type') == 'poke':
@@ -1752,12 +1756,17 @@ class GameEngine:
         # 扣除发起者10积分
         self.player_dao.add_score(qq_id, -10)
 
+        # 记录发起时间戳
+        import time
+        start_time = int(time.time())
+
         # 保存对决状态到发起者
         state.pending_duel = {
             'duel_type': 'poke',
             'challenger_qq': qq_id,
             'target_qq': target_qq,
-            'status': 'waiting_accept'
+            'status': 'waiting_accept',
+            'start_time': start_time
         }
         self.state_dao.update_state(state)
 
@@ -1766,7 +1775,8 @@ class GameEngine:
             'duel_type': 'poke',
             'challenger_qq': qq_id,
             'target_qq': target_qq,
-            'status': 'awaiting_accept'
+            'status': 'awaiting_accept',
+            'start_time': start_time
         }
         self.state_dao.update_state(target_state)
 
@@ -1788,6 +1798,11 @@ class GameEngine:
             qq_id: 接受挑战的玩家QQ号
             challenger_qq: 发起挑战的玩家QQ号
         """
+        # 先检查对决是否已超时
+        is_expired, expired_msg = self._check_and_clear_expired_duel(qq_id)
+        if is_expired:
+            return GameResult(False, expired_msg)
+
         # 检查玩家是否存在
         player = self.player_dao.get_player(qq_id)
         if not player:
@@ -1884,6 +1899,105 @@ class GameEngine:
         return GameResult(True,
             f"🎉 恭喜 {player_name} 获得Poke骰对决胜利！\n"
             f"💰 获得 20 积分奖励！")
+
+    def _check_and_clear_expired_duel(self, qq_id: str) -> tuple[bool, str]:
+        """检查并清理过期的对决
+
+        Returns:
+            (is_expired, message): 是否过期，以及过期提示消息
+        """
+        import time
+        state = self.state_dao.get_state(qq_id)
+
+        if not state.pending_duel or state.pending_duel.get('duel_type') != 'poke':
+            return False, ""
+
+        # 只检查等待接受状态的对决
+        status = state.pending_duel.get('status')
+        if status not in ('waiting_accept', 'awaiting_accept'):
+            return False, ""
+
+        start_time = state.pending_duel.get('start_time', 0)
+        if not start_time:
+            return False, ""
+
+        timeout = self.settings_dao.get_duel_timeout()
+        current_time = int(time.time())
+
+        if current_time - start_time > timeout:
+            # 对决已超时，清理状态并退回积分
+            challenger_qq = state.pending_duel.get('challenger_qq')
+            target_qq = state.pending_duel.get('target_qq')
+
+            # 退回挑战者积分
+            self.player_dao.add_score(challenger_qq, 10)
+
+            # 清除双方状态
+            state.pending_duel = None
+            self.state_dao.update_state(state)
+
+            other_qq = target_qq if qq_id == challenger_qq else challenger_qq
+            if other_qq:
+                other_state = self.state_dao.get_state(other_qq)
+                other_state.pending_duel = None
+                self.state_dao.update_state(other_state)
+
+            challenger = self.player_dao.get_player(challenger_qq)
+            challenger_name = challenger.nickname if challenger else challenger_qq
+
+            print(f"[Poke对决] 超时自动取消: {challenger_qq} 的挑战已过期，积分已退回")
+
+            return True, f"⏰ Poke对决已超时取消！\n{challenger_name} 的 10 积分已退回"
+
+        return False, ""
+
+    def cancel_poke_duel(self, qq_id: str) -> GameResult:
+        """取消Poke骰对决（退回10积分）
+
+        Args:
+            qq_id: 取消对决的玩家QQ号（必须是挑战发起者）
+        """
+        # 先检查对决是否已超时
+        is_expired, expired_msg = self._check_and_clear_expired_duel(qq_id)
+        if is_expired:
+            return GameResult(True, expired_msg + "\n（已自动取消）")
+
+        state = self.state_dao.get_state(qq_id)
+
+        # 检查是否有待处理的poke对决
+        if not state.pending_duel or state.pending_duel.get('duel_type') != 'poke':
+            return GameResult(False, "❌ 当前没有待处理的Poke对决")
+
+        # 只有挑战发起者才能取消
+        if state.pending_duel.get('challenger_qq') != qq_id:
+            return GameResult(False, "❌ 只有挑战发起者才能取消对决")
+
+        # 只有等待接受状态才能取消
+        if state.pending_duel.get('status') != 'waiting_accept':
+            return GameResult(False, "❌ 对决已开始，无法取消")
+
+        target_qq = state.pending_duel.get('target_qq')
+
+        # 退回挑战者积分
+        self.player_dao.add_score(qq_id, 10)
+
+        # 清除双方状态
+        state.pending_duel = None
+        self.state_dao.update_state(state)
+
+        if target_qq:
+            target_state = self.state_dao.get_state(target_qq)
+            target_state.pending_duel = None
+            self.state_dao.update_state(target_state)
+
+        player = self.player_dao.get_player(qq_id)
+        player_name = player.nickname if player else qq_id
+
+        print(f"[Poke对决] {qq_id}({player_name}) 取消挑战，积分已退回")
+
+        return GameResult(True,
+            f"✅ 已取消Poke对决挑战\n"
+            f"💰 {player_name} 的 10 积分已退回")
 
     def thanks_fortune(self, qq_id: str) -> GameResult:
         """玩家回复"谢谢财神"获得额外奖励
