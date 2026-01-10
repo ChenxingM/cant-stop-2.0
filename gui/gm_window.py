@@ -1402,13 +1402,14 @@ class GMWindow(QMainWindow):
         response_layout.addWidget(response_input)
         layout.addLayout(response_layout)
 
-        # 积分奖励
+        # 积分奖励（支持负数扣分）
         score_layout = QHBoxLayout()
         score_layout.addWidget(QLabel("积分奖励:"))
         score_input = QSpinBox()
-        score_input.setRange(0, 10000)
+        score_input.setRange(-10000, 10000)
         score_input.setValue(0)
         score_layout.addWidget(score_input)
+        score_layout.addWidget(QLabel("(负数=扣分)"))
         layout.addLayout(score_layout)
 
         # 每人限制
@@ -1479,13 +1480,14 @@ class GMWindow(QMainWindow):
         response_layout.addWidget(response_input)
         layout.addLayout(response_layout)
 
-        # 积分奖励
+        # 积分奖励（支持负数扣分）
         score_layout = QHBoxLayout()
         score_layout.addWidget(QLabel("积分奖励:"))
         score_input = QSpinBox()
-        score_input.setRange(0, 10000)
+        score_input.setRange(-10000, 10000)
         score_input.setValue(cmd.score_reward)
         score_layout.addWidget(score_input)
+        score_layout.addWidget(QLabel("(负数=扣分)"))
         layout.addLayout(score_layout)
 
         # 每人限制

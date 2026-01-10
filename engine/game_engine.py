@@ -94,8 +94,8 @@ class GameEngine:
             if usage_count >= cmd.per_player_limit:
                 return GameResult(False, "你已达到此口令的使用上限")
 
-        # 发放积分（如果有）
-        if cmd.score_reward > 0:
+        # 发放积分（如果有，支持正数加分和负数扣分）
+        if cmd.score_reward != 0:
             # 确保玩家已注册
             player = self.player_dao.get_player(qq_id)
             if not player:
@@ -109,6 +109,8 @@ class GameEngine:
         response = cmd.response
         if cmd.score_reward > 0:
             response += f"\n获得 {cmd.score_reward} 积分！"
+        elif cmd.score_reward < 0:
+            response += f"\n扣除 {abs(cmd.score_reward)} 积分！"
 
         return GameResult(True, response)
 
