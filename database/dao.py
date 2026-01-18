@@ -660,9 +660,9 @@ class AchievementDAO:
             ''', (qq_id,))
             achievement_id = cursor.fetchone()['new_id']
 
-        # 插入新成就
+        # 插入新成就（使用 OR IGNORE 避免重复插入报错）
         cursor.execute('''
-            INSERT INTO player_achievements
+            INSERT OR IGNORE INTO player_achievements
             (qq_id, achievement_id, achievement_name, achievement_type)
             VALUES (?, ?, ?, ?)
         ''', (qq_id, achievement_id, achievement_name, achievement_type))
